@@ -2672,11 +2672,18 @@ function ncbRefundTarget(c) {
   const lf = ledgerFig(c);
   return lf.ins === 'KB' && lf.totalDiscount > 0;
 }
+// Upfront NCB(선할인)·NCB(후할인)는 환급 주기가 달라 완전히 분리된 Case 필드(c.upfrontRefund* / c.refund*)로
+// 관리한다. 각각 '환급 완료' 또는 '해당 없음(그 Case엔 그 환급이 적용되지 않음, 담당자가 직접 표시)'이어야
+// 처리된 것으로 보고, 둘 다 처리돼야 NCB 환급(6단계) 전체가 완료다 — 하나라도 미환급이면 미완료로 남는다.
+function refundPartSettled(c, part) {
+  return part === 'up' ? (!!c.upfrontRefundNA || !!c.upfrontRefundDone) : (!!c.refundNA || !!c.refundDone);
+}
+function ncbRefundAllSettled(c) { return refundPartSettled(c, 'up') && refundPartSettled(c, 'post'); }
 const inProgress = c => {
   if (!c) return false;
   if (c.cancel) return false;   // 취소된 Case는 기본 진행 목록에서 뺀다 (상태 필터에서 '취소'를 고르면 따로 보여준다)
   if (!(c.paid && c.paid.payDate)) return true;
-  if (ncbRefundTarget(c) && !c.refundDone) return true;
+  if (ncbRefundTarget(c) && !ncbRefundAllSettled(c)) return true;
   return false;
 };
 // 부보 요청 전(coverStage==='WAIT')에는 영업팀이 직접 취소를 끝낼 수 있고, 그 이후에는 기획/ESG팀 확인을 거쳐야 한다.
@@ -2707,7 +2714,7 @@ const COVER_STAGES = [
 // 그대로 둔다 — 환급 대상이 아니거나 환급까지 끝났을 때만 화면·카드 집계에서 빠진다(inProgress()와 같은 기준).
 function coverStage(c) {
   const confirmed = !!c.coverConfirm;
-  const settled = !ncbRefundTarget(c) || !!c.refundDone;
+  const settled = !ncbRefundTarget(c) || ncbRefundAllSettled(c);
   if (confirmed && ((c.paid && settled) || (c.step >= 13 && settled))) return 'PAID';
   if (confirmed && (c.paid || c.step >= 13 || c.step >= CONFIRMED_STEP)) return 'DONE';
   return c.step >= 6 ? 'ING' : 'WAIT';
@@ -3487,9 +3494,11 @@ function bindCaseDetail(box) {
       renderAll();
       renderCaseDetail();
     } else if (e.target.id === 'ncbRefundDone') {
-      const prev = !!c.refundDone;
+      const prevLabel = c.refundNA ? '해당 없음' : (c.refundDone ? '환급 완료' : '미환급');
       c.refundDone = e.target.value === 'DONE';
-      addHistory(c, '환급 상태', prev ? '환급 완료' : '미환급', c.refundDone ? '환급 완료' : '미환급');
+      c.refundNA = e.target.value === 'NA';
+      const newLabel = c.refundNA ? '해당 없음' : (c.refundDone ? '환급 완료' : '미환급');
+      addHistory(c, '환급 상태', prevLabel, newLabel);
       persist();
       renderAll();
       renderCaseDetail();
@@ -3522,9 +3531,11 @@ function bindCaseDetail(box) {
       renderAll();
       renderCaseDetail();
     } else if (e.target.id === 'ncbUpfrontRefundDone') {
-      const prev = !!c.upfrontRefundDone;
+      const prevLabel = c.upfrontRefundNA ? '해당 없음' : (c.upfrontRefundDone ? '환급 완료' : '미환급');
       c.upfrontRefundDone = e.target.value === 'DONE';
-      addHistory(c, 'Upfront NCB 환급 상태', prev ? '환급 완료' : '미환급', c.upfrontRefundDone ? '환급 완료' : '미환급');
+      c.upfrontRefundNA = e.target.value === 'NA';
+      const newLabel = c.upfrontRefundNA ? '해당 없음' : (c.upfrontRefundDone ? '환급 완료' : '미환급');
+      addHistory(c, 'Upfront NCB 환급 상태', prevLabel, newLabel);
       persist();
       renderAll();
       renderCaseDetail();
@@ -3551,14 +3562,19 @@ function bindCaseDetail(box) {
       // 선택만 바꿀 때는 저장하지 않고, 지급일자 칸만 바로 보이거나 숨긴다 — 실제 저장은 「저장」을 눌러야 한다
       const w = box.querySelector('#payDate3Wrap');
       if (w) w.classList.toggle('hidden', e.target.value !== 'DONE');
-    } else if (e.target.id === 'refundStatus3') {
-      const w = box.querySelector('#refundDate3Wrap');
-      if (w) w.classList.toggle('hidden', e.target.value !== 'DONE');
+    } else if (e.target.id === 'refundStatus3' || e.target.id === 'refundUpStatus3') {
+      const idp = e.target.id === 'refundUpStatus3' ? 'refundUp' : 'refund';
+      const show = e.target.value === 'DONE';
+      const wd = box.querySelector(`#${idp}Date3Wrap`);
+      const wa = box.querySelector(`#${idp}Amount3Wrap`);
+      if (wd) wd.classList.toggle('hidden', !show);
+      if (wa) wa.classList.toggle('hidden', !show);
     }
   });
   // 업무 흐름 처리: 견적 전달·부보확정·HRA 진입·진출·인보이스·최종보험료·송금
   const FLOW_ACTS = ['quote-share', 'cover-confirm', 'cover-confirm-g5', 'hra-in-confirm', 'hra-out-confirm',
     'sched-change-ack', 'g5-select', 'pay-edit', 'pay-cancel', 'pay-save', 'refund-edit', 'refund-cancel', 'refund-save',
+    'refund-up-edit', 'refund-up-cancel', 'refund-up-save',
     'qm-discard', 'cancel-confirm', 'gmail-sync-now'];
   box.addEventListener('click', e => {
     const b = e.target.closest(FLOW_ACTS.map(a => `[data-act="${a}"]`).join(', '));
@@ -3641,21 +3657,47 @@ function bindCaseDetail(box) {
       if (!ncbRefundTarget(c)) return err('환급 대상이 아닙니다.');
       const refundVal = box.querySelector('#refundStatus3').value;
       const refundDateVal = box.querySelector('#refundDate3') ? box.querySelector('#refundDate3').value : '';
-      if (refundVal === 'DONE' && !isValidDate(refundDateVal)) return err('환급일자를 입력하세요.');
+      if (refundVal === 'DONE' && !isValidDate(refundDateVal)) return err('실제 환급일자를 입력하세요.');
       const prevCur = c.refundActualCurrency || ledgerFig(c).cur;
       const newCur = box.querySelector('#refundCur3') ? box.querySelector('#refundCur3').value || prevCur : prevCur;
       const amtRaw = box.querySelector('#refundAmount3').value;
       const amtVal = amtRaw === '' ? null : Number(amtRaw);
       const expMonthVal = box.querySelector('#refundExpMonth3') ? box.querySelector('#refundExpMonth3').value || null : c.refundExpectedMonth;
-      const prevRefund = c.refundDone ? `환급 완료 · ${c.refundActualDate || '-'} · ${c.refundActualAmount != null ? fmtMoney(c.refundActualAmount, prevCur) : '금액 미입력'}` : '미환급';
+      const prevLabel = c.refundNA ? '해당 없음' : (c.refundDone ? `환급 완료 · ${c.refundActualDate || '-'} · ${c.refundActualAmount != null ? fmtMoney(c.refundActualAmount, prevCur) : '금액 미입력'}` : '미환급');
       c.refundExpectedMonth = expMonthVal;
       c.refundDone = refundVal === 'DONE';
+      c.refundNA = refundVal === 'NA';
       c.refundActualDate = c.refundDone ? refundDateVal : null;
       c.refundActualCurrency = newCur;
-      c.refundActualAmount = Number.isFinite(amtVal) ? rnd(amtVal * minorUnit(newCur)) : null;
-      const newRefund = c.refundDone ? `환급 완료 · ${c.refundActualDate} · ${c.refundActualAmount != null ? fmtMoney(c.refundActualAmount, newCur) : '금액 미입력'}` : '미환급';
-      addHistory(c, 'NCB 환급 상태', prevRefund, newRefund);
+      c.refundActualAmount = c.refundDone && Number.isFinite(amtVal) ? rnd(amtVal * minorUnit(newCur)) : null;
+      const newLabel = c.refundNA ? '해당 없음' : (c.refundDone ? `환급 완료 · ${c.refundActualDate} · ${c.refundActualAmount != null ? fmtMoney(c.refundActualAmount, newCur) : '금액 미입력'}` : '미환급');
+      addHistory(c, 'NCB 환급 상태', prevLabel, newLabel);
       refundEditFor = null;
+    } else if (act === 'refund-up-edit') {
+      upfrontRefundEditFor = c.id;
+    } else if (act === 'refund-up-cancel') {
+      upfrontRefundEditFor = null;
+    } else if (act === 'refund-up-save') {
+      // Upfront NCB(선할인)도 'NCB 현황 및 환급 관리'와 완전히 같은 필드(c.upfrontRefund*)에 저장한다
+      if (!ncbRefundTarget(c)) return err('환급 대상이 아닙니다.');
+      const refundVal = box.querySelector('#refundUpStatus3').value;
+      const refundDateVal = box.querySelector('#refundUpDate3') ? box.querySelector('#refundUpDate3').value : '';
+      if (refundVal === 'DONE' && !isValidDate(refundDateVal)) return err('실제 환급일자를 입력하세요.');
+      const prevCur = c.upfrontRefundActualCurrency || ledgerFig(c).cur;
+      const newCur = box.querySelector('#refundUpCur3') ? box.querySelector('#refundUpCur3').value || prevCur : prevCur;
+      const amtRaw = box.querySelector('#refundUpAmount3').value;
+      const amtVal = amtRaw === '' ? null : Number(amtRaw);
+      const expMonthVal = box.querySelector('#refundUpExpMonth3') ? box.querySelector('#refundUpExpMonth3').value || null : c.upfrontRefundExpectedMonth;
+      const prevLabel = c.upfrontRefundNA ? '해당 없음' : (c.upfrontRefundDone ? `환급 완료 · ${c.upfrontRefundActualDate || '-'} · ${c.upfrontRefundActualAmount != null ? fmtMoney(c.upfrontRefundActualAmount, prevCur) : '금액 미입력'}` : '미환급');
+      c.upfrontRefundExpectedMonth = expMonthVal;
+      c.upfrontRefundDone = refundVal === 'DONE';
+      c.upfrontRefundNA = refundVal === 'NA';
+      c.upfrontRefundActualDate = c.upfrontRefundDone ? refundDateVal : null;
+      c.upfrontRefundActualCurrency = newCur;
+      c.upfrontRefundActualAmount = c.upfrontRefundDone && Number.isFinite(amtVal) ? rnd(amtVal * minorUnit(newCur)) : null;
+      const newLabel = c.upfrontRefundNA ? '해당 없음' : (c.upfrontRefundDone ? `환급 완료 · ${c.upfrontRefundActualDate} · ${c.upfrontRefundActualAmount != null ? fmtMoney(c.upfrontRefundActualAmount, newCur) : '금액 미입력'}` : '미환급');
+      addHistory(c, 'Upfront NCB 환급 상태', prevLabel, newLabel);
+      upfrontRefundEditFor = null;
     } else if (act === 'qm-discard') {
       c.quoteDraft = null;
     } else if (act === 'cancel-confirm') {
@@ -5641,7 +5683,8 @@ function progress5Items(c) {
   // 환급 대상 자체가 없으면(KB 후할인 조건 없음) 기다릴 게 없으므로 바로 완료로 본다.
   const paidDone = !!(c.paid && c.paid.payDate);
   // NCB 환급은 보험료 지급이 끝나야 의미가 있다 — 지급 전인데 '환급 대상 없음'이라고 먼저 완료로 치지 않는다.
-  const refundDone = paidDone && (!ncbRefundTarget(c) || !!c.refundDone);
+  // Upfront NCB(선할인)·NCB(후할인) 둘 다 '환급 완료' 또는 '해당 없음'이어야 완료로 본다(하나만 끝나도 미완료).
+  const refundDone = paidDone && (!ncbRefundTarget(c) || ncbRefundAllSettled(c));
   const done = [quoteSent, quoteDone, requestDone, finalSent, paidDone, refundDone];
   // '현재 상태' = 실제로 가장 나중에 끝난 업무의 '다음' 단계. 예: 보험료 지급(5단계)까지 끝났으면 자동으로
   // 6단계(NCB 환급)가 '지금 진행 중'이 된다(5단계에 멈춰 있지 않음). 끝난 단계는 done[]에서 그대로 ✓로 남는다.
@@ -5658,7 +5701,7 @@ function progress5Items(c) {
 // 임의로 지어내지 않고 실제 저장된 c.paid/c.refundDone/환급 대상 여부를 그대로 읽는다.
 function stagePayRefundSuffix(c, idx) {
   if (idx === 4) return (c.paid && c.paid.payDate) ? '완료' : '미지급';
-  if (idx === 5) return !ncbRefundTarget(c) ? '대상 없음' : (c.refundDone ? '완료' : '미환급');
+  if (idx === 5) return !ncbRefundTarget(c) ? '대상 없음' : (ncbRefundAllSettled(c) ? '완료' : '미환급');
   return null;
 }
 // WAR AP 관리 목록 '현재 상태' 컬럼 전용 — 세부 처리 결과('정산 완료'·'인보이스 요청' 등)는 쓰지 않고, 상단 진행
@@ -5771,45 +5814,66 @@ function payStepHtml(c, locked) {
       <button type="button" class="sub small" data-act="pay-cancel">취소</button>
     </div>`;
 }
-// 6단계 'NCB 환급' — 보험료 지급과는 별개 업무. 후할인(NCB) 예상금액은 보험료 산출 내역에서 자동으로 가져와 참고로만 보여주고,
-// 실제 입금액은 따로 입력·수정한다(부분 환급 등으로 예상과 다를 수 있음). Upfront NCB(선할인)는 여기서 다루지 않는다.
-function refundStepHtml(c, locked) {
-  const target = ncbRefundTarget(c);
+// 6단계 'NCB 환급' — 보험료 지급과는 별개 업무. Upfront NCB(선할인)·NCB(후할인)은 환급 주기가 달라(1·4·7·10월 vs 4월)
+// 완전히 분리된 Case 필드로 관리하며, 'NCB 현황 및 환급 관리' 영역과 완전히 같은 필드를 그대로 읽고 쓴다
+// (저장소가 하나라 어느 화면에서 고쳐도 같은 값이 보인다). 두 블록은 디자인·입력 방식이 완전히 같고, part만 다르다.
+function refundBlockHtml(c, locked, part) {
+  const isUp = part === 'up';
   const lf = ledgerFig(c);
-  if (!target) {
-    return `<table class="kv"><tbody><tr><th>환급 여부</th><td>환급 대상 없음</td></tr></tbody></table>
-      <p class="muted" style="margin-top:6px">이 보험사·Case는 후할인(NCB) 대상이 아니라 환급 관리가 필요 없습니다.</p>`;
-  }
-  const editing = !locked && refundEditFor === c.id;
-  // 'NCB 현황 및 환급 관리' 영역과 완전히 같은 필드(c.refundDone/refundExpectedMonth/refundActualDate/refundActualAmount)를
-  // 그대로 읽고 쓴다 — 저장소가 하나라 어느 화면에서 고쳐도 같은 값이 보인다.
-  const expectedText = `${fmtMoney(lf.post, lf.cur)}${!lf.postConfirmed ? ' <span class="muted">(예상 — 후할인 조건 미확정)</span>' : ''}`;
-  const refundCur = c.refundActualCurrency || lf.cur;   // 실제 환급금액의 통화 — NCB 산출 통화(lf.cur)와 별개로 고를 수 있음
+  const title = isUp ? 'Upfront NCB (선할인)' : 'NCB (후할인)';
+  const idp = isUp ? 'refundUp' : 'refund';
+  const fDone = isUp ? 'upfrontRefundDone' : 'refundDone';
+  const fNA = isUp ? 'upfrontRefundNA' : 'refundNA';
+  const fExp = isUp ? 'upfrontRefundExpectedMonth' : 'refundExpectedMonth';
+  const fDate = isUp ? 'upfrontRefundActualDate' : 'refundActualDate';
+  const fAmt = isUp ? 'upfrontRefundActualAmount' : 'refundActualAmount';
+  const fCur = isUp ? 'upfrontRefundActualCurrency' : 'refundActualCurrency';
+  const editAct = isUp ? 'refund-up-edit' : 'refund-edit';
+  const cancelAct = isUp ? 'refund-up-cancel' : 'refund-cancel';
+  const saveAct = isUp ? 'refund-up-save' : 'refund-save';
+  const editing = !locked && (isUp ? upfrontRefundEditFor : refundEditFor) === c.id;
+  const amountText = isUp ? fmtMoney(lf.pre, lf.cur)
+    : `${fmtMoney(lf.post, lf.cur)}${!lf.postConfirmed ? ' <span class="muted">(예상 — 후할인 조건 미확정)</span>' : ''}`;
+  const done = !!c[fDone], na = !!c[fNA];
+  const cur = c[fCur] || lf.cur;   // 실제 환급금액의 통화 — NCB 산출 통화(lf.cur)와 별개로 고를 수 있음
+  const statusLabel = na ? '해당 없음' : (done ? '환급 완료' : '미환급');
   if (!editing) {
-    return `<table class="kv"><tbody>
-        <tr><th>NCB (후할인)</th><td>${expectedText}</td></tr>
-        <tr><th>환급 예정월</th><td>${monthLabel(c.refundExpectedMonth) === '-' ? '<span class="muted">미입력</span>' : esc(monthLabel(c.refundExpectedMonth))}</td></tr>
-        <tr><th>환급 여부</th><td>${c.refundDone ? '환급 완료' : '미환급'}</td></tr>
-        <tr><th>환급일자</th><td>${c.refundDone ? esc(c.refundActualDate || '확인 필요') : '<span class="muted">-</span>'}</td></tr>
-        <tr><th>실제 환급금액</th><td>${c.refundActualAmount != null ? fmtMoney(c.refundActualAmount, refundCur) : '<span class="muted">미입력</span>'}</td></tr>
+    return `<div class="sub-block-title" style="margin-top:14px">${esc(title)} 환급</div>
+      <table class="kv"><tbody>
+        <tr><th>${esc(title)}</th><td>${amountText}</td></tr>
+        <tr><th>환급 예정월</th><td>${monthLabel(c[fExp]) === '-' ? '<span class="muted">미입력</span>' : esc(monthLabel(c[fExp]))}</td></tr>
+        <tr><th>환급 여부</th><td>${esc(statusLabel)}</td></tr>
+        <tr><th>실제 환급일자</th><td>${done ? esc(c[fDate] || '확인 필요') : '<span class="muted">-</span>'}</td></tr>
+        <tr><th>실제 환급금액</th><td>${done && c[fAmt] != null ? fmtMoney(c[fAmt], cur) : '<span class="muted">미입력</span>'}</td></tr>
       </tbody></table>
       ${locked ? '<p class="muted" style="margin-top:8px">이전 단계 완료 후 처리 가능합니다.</p>'
-        : '<div class="bar" style="justify-content:flex-end;margin-top:8px"><button type="button" class="sub small" data-act="refund-edit">수정</button></div>'}`;
+        : `<div class="bar" style="justify-content:flex-end;margin-top:8px"><button type="button" class="sub small" data-act="${editAct}">수정</button></div>`}`;
   }
-  return `<table class="kv"><tbody><tr><th>NCB (후할인, 예상)</th><td>${expectedText}</td></tr></tbody></table>
+  const statusVal = na ? 'NA' : (done ? 'DONE' : '');
+  return `<div class="sub-block-title" style="margin-top:14px">${esc(title)} 환급</div>
+    <table class="kv"><tbody><tr><th>${esc(title)} (예상)</th><td>${amountText}</td></tr></tbody></table>
     <div class="form-grid" style="margin-top:8px">
-      <label><span>환급 예정월</span><input type="month" id="refundExpMonth3" value="${esc(c.refundExpectedMonth || '')}"></label>
-      <label><span>환급 여부</span><select id="refundStatus3">
-        <option value=""${!c.refundDone ? ' selected' : ''}>미환급</option>
-        <option value="DONE"${c.refundDone ? ' selected' : ''}>환급 완료</option>
+      <label><span>환급 예정월</span><input type="month" id="${idp}ExpMonth3" value="${esc(c[fExp] || '')}"></label>
+      <label><span>환급 여부</span><select id="${idp}Status3">
+        <option value=""${statusVal === '' ? ' selected' : ''}>미환급</option>
+        <option value="DONE"${statusVal === 'DONE' ? ' selected' : ''}>환급 완료</option>
+        <option value="NA"${statusVal === 'NA' ? ' selected' : ''}>해당 없음</option>
       </select></label>
-      <label id="refundDate3Wrap" class="field${c.refundDone ? '' : ' hidden'}"><span class="req">환급일자</span><input type="date" id="refundDate3" value="${esc(c.refundActualDate || '')}"></label>
-      <label><span>실제 환급금액</span><div class="bar" style="gap:4px">${curSelectHtml('refundCur3', refundCur)}<input type="number" id="refundAmount3" min="0" step="0.01" value="${c.refundActualAmount != null ? c.refundActualAmount / minorUnit(refundCur) : ''}"></div></label>
+      <label id="${idp}Date3Wrap" class="field${done ? '' : ' hidden'}"><span class="req">실제 환급일자</span><input type="date" id="${idp}Date3" value="${esc(c[fDate] || '')}"></label>
+      <label id="${idp}Amount3Wrap" class="field${done ? '' : ' hidden'}"><span>실제 환급금액</span><div class="bar" style="gap:4px">${curSelectHtml(`${idp}Cur3`, cur)}<input type="number" id="${idp}Amount3" min="0" step="0.01" value="${c[fAmt] != null ? c[fAmt] / minorUnit(cur) : ''}"></div></label>
     </div>
     <div class="bar" style="margin-top:8px">
-      <button type="button" class="small" data-act="refund-save">저장</button>
-      <button type="button" class="sub small" data-act="refund-cancel">취소</button>
+      <button type="button" class="small" data-act="${saveAct}">저장</button>
+      <button type="button" class="sub small" data-act="${cancelAct}">취소</button>
     </div>`;
+}
+function refundStepHtml(c, locked) {
+  const target = ncbRefundTarget(c);
+  if (!target) {
+    return `<table class="kv"><tbody><tr><th>환급 여부</th><td>환급 대상 없음</td></tr></tbody></table>
+      <p class="muted" style="margin-top:6px">이 보험사·Case는 Upfront NCB(선할인)·NCB(후할인) 대상이 아니라 환급 관리가 필요 없습니다.</p>`;
+  }
+  return refundBlockHtml(c, locked, 'up') + refundBlockHtml(c, locked, 'post');
 }
 // 6단계 중 선택한 단계의 상세 내용 — 보험료 지급·NCB 환급(4·5번 인덱스)은 조회뿐 아니라 저장 후 수정도 해야 해서
 // 진행 중/완료와 무관하게 늘 전용 화면(payStepHtml/refundStepHtml)으로 보여준다. 나머지는 기존과 동일하다.
@@ -6827,6 +6891,7 @@ function ncbRefundSectionHtml(c) {
   if (lf.ins !== 'KB') return '';   // NCB(선할인·후할인) 모두 KB 전용
   const entries = refundEntries(c);
   const done = !!c.refundDone;
+  const na = !!c.refundNA;
   const needDate = done && !c.refundActualDate;
   const refundCur = c.refundActualCurrency || lf.cur;   // 실제 환급금액의 통화 — NCB 산출 통화(lf.cur)와 별개로 고를 수 있음
 
@@ -6834,6 +6899,7 @@ function ncbRefundSectionHtml(c) {
   // — 금액이나 예정월을 임의로 지어내지 않는다.
   const upfrontConfirmed = c.premium.preRate != null;
   const upfrontDone = !!c.upfrontRefundDone;
+  const upfrontNA = !!c.upfrontRefundNA;
   const upfrontNeedDate = upfrontDone && !c.upfrontRefundActualDate;
   const upfrontCur = c.upfrontRefundActualCurrency || lf.cur;
   const upfrontBlock = !upfrontConfirmed
@@ -6841,12 +6907,14 @@ function ncbRefundSectionHtml(c) {
     : `<div class="bar" style="margin-top:10px">
         <label class="field"><span>환급 예정월</span><input type="month" id="ncbUpfrontExpectedMonth" value="${esc(c.upfrontRefundExpectedMonth || '')}"></label>
         <label class="field"><span>환급 상태</span><select id="ncbUpfrontRefundDone">
-          <option value=""${!upfrontDone ? ' selected' : ''}>미환급</option>
+          <option value=""${(!upfrontDone && !upfrontNA) ? ' selected' : ''}>미환급</option>
           <option value="DONE"${upfrontDone ? ' selected' : ''}>환급 완료</option>
+          <option value="NA"${upfrontNA ? ' selected' : ''}>해당 없음</option>
         </select></label>
         ${upfrontDone ? `<label class="field"><span>실제 환급일</span><input type="date" id="ncbUpfrontActualDate" value="${esc(c.upfrontRefundActualDate || '')}"></label>` : ''}
         ${upfrontDone ? `<label class="field"><span>실제 환급금액</span><div class="bar" style="gap:4px">${curSelectHtml('ncbUpfrontActualCur', upfrontCur)}<input type="number" id="ncbUpfrontActualAmount" min="0" step="0.01" value="${c.upfrontRefundActualAmount != null ? c.upfrontRefundActualAmount / minorUnit(upfrontCur) : ''}"></div></label>` : ''}
         ${upfrontNeedDate ? '<span class="pending">실제 환급일을 입력해야 환급 완료 처리가 끝납니다.</span>' : ''}
+        ${upfrontNA ? '<p class="muted" style="margin-top:4px">이 Case는 Upfront NCB(선할인) 환급 대상이 아닌 것으로 확인됨 — 완료 판단에서 제외됩니다.</p>' : ''}
       </div>`;
 
   return `<section id="ncbRefundSec">
@@ -6862,12 +6930,14 @@ function ncbRefundSectionHtml(c) {
     <div class="bar" style="margin-top:10px">
       <label class="field"><span>환급 예정월</span><input type="month" id="ncbExpectedMonth" value="${esc(c.refundExpectedMonth || '')}"></label>
       <label class="field"><span>환급 상태</span><select id="ncbRefundDone">
-        <option value=""${!done ? ' selected' : ''}>미환급</option>
+        <option value=""${(!done && !na) ? ' selected' : ''}>미환급</option>
         <option value="DONE"${done ? ' selected' : ''}>환급 완료</option>
+        <option value="NA"${na ? ' selected' : ''}>해당 없음</option>
       </select></label>
       ${done ? `<label class="field"><span>실제 환급일</span><input type="date" id="ncbActualDate" value="${esc(c.refundActualDate || '')}"></label>` : ''}
       ${done ? `<label class="field"><span>실제 환급금액</span><div class="bar" style="gap:4px">${curSelectHtml('ncbActualCur', refundCur)}<input type="number" id="ncbActualAmount" min="0" step="0.01" value="${c.refundActualAmount != null ? c.refundActualAmount / minorUnit(refundCur) : ''}"></div></label>` : ''}
       ${needDate ? '<span class="pending">실제 환급일을 입력해야 환급 완료 처리가 끝납니다.</span>' : ''}
+      ${na ? '<p class="muted" style="margin-top:4px">이 Case는 NCB(후할인) 환급 대상이 아닌 것으로 확인됨 — 완료 판단에서 제외됩니다.</p>' : ''}
       <span class="msg" id="ncbMsg"></span>
     </div>
     ${entries.length ? `<details class="refund-log" style="margin-top:8px">
@@ -6939,7 +7009,8 @@ function finalPremiumTable(c) {
 // Gmail 인보이스 붙여넣기·분석 화면은 더 이상 쓰지 않는다(보험료 지급 단계 간소화) — 예전에 저장된 c.invoiceInfo/c.invoiceDocs
 // 데이터 자체는 지우지 않고 그대로 보존한다(화면에서만 뺌). 아래 상태값들은 현재 화면(6단계 진행바)에서 쓴다.
 let payEditFor = null;   // 5단계(보험료 지급) 칸을 "수정"으로 열어 둔 Case id — 다른 Case를 열면 자동으로 꺼진다
-let refundEditFor = null;   // 6단계(NCB 환급) 칸을 "수정"으로 열어 둔 Case id — 다른 Case를 열면 자동으로 꺼진다
+let refundEditFor = null;   // 6단계(NCB 환급) NCB(후할인) 칸을 "수정"으로 열어 둔 Case id — 다른 Case를 열면 자동으로 꺼진다
+let upfrontRefundEditFor = null;   // 6단계(NCB 환급) Upfront NCB(선할인) 칸을 "수정"으로 열어 둔 Case id — refundEditFor와 독립
 let g5Selected = null;   // { caseId, idx } — 진행현황에서 지금 클릭해 펼쳐 둔 단계. 다른 Case를 열면 무시되고 현재 진행 중인 단계로 되돌아간다
 function isCharterer(v) { return vkey(v) === 'CHARTERER'; }
 function isCustomPayer(v) { return vkey(v) === 'CUSTOM'; }
@@ -8420,10 +8491,13 @@ function sanitizeCase(o, usedIds) {
     refundActualDate: dt(o.refundActualDate) || null, refundActualAmount: n(o.refundActualAmount),
     // 실제 환급금액의 통화 — 없으면(예전 데이터) NCB 산출 통화를 그대로 쓴다
     refundActualCurrency: ['USD', 'KRW'].includes(o.refundActualCurrency) ? o.refundActualCurrency : null,
+    // '해당 없음' — 이 Case엔 NCB(후할인) 환급이 적용되지 않는다고 담당자가 직접 표시한 경우만 true(자동 판단 아님)
+    refundNA: !!o.refundNA,
     // Upfront NCB(선할인) 환급 관리 — NCB(후할인)와 환급 주기가 달라(1·4·7·10월 vs 4월) 완전히 별도로 저장
     upfrontRefundDone: !!o.upfrontRefundDone, upfrontRefundExpectedMonth: mo(o.upfrontRefundExpectedMonth),
     upfrontRefundActualDate: dt(o.upfrontRefundActualDate) || null, upfrontRefundActualAmount: n(o.upfrontRefundActualAmount),
     upfrontRefundActualCurrency: ['USD', 'KRW'].includes(o.upfrontRefundActualCurrency) ? o.upfrontRefundActualCurrency : null,
+    upfrontRefundNA: !!o.upfrontRefundNA,
     // 예전 테스트(가상) 위치 기록은 실제 AIS와 섞이지 않게 버린다
     ais: o.ais && typeof o.ais === 'object' && !/TEST/.test((o.ais.last && o.ais.last.src) || '') && o.ais.simDist == null ? o.ais : null,
     // 보험사 견적 메일 붙여넣기 분석 — 초안(quoteDraft)은 확인 전 임시 상태, warranty는 담당자가 확인·저장한 확정 내용
@@ -8760,7 +8834,9 @@ function monthLabel(ym) { return ym && /^\d{4}-\d{2}$/.test(ym) ? `${ym.slice(0,
 // 항차 하나의 환급 상태 — NCB(후할인) 조건이 아직 확정 안 됐으면 환급 여부와 무관하게 먼저 'NCB 미확정'으로 구분한다
 // (NCB 금액이 0으로 보인다고 무조건 미환급으로 처리하지 않는다)
 // NCB(후할인)는 KB 전용이라 그 외 보험사는 환급을 기다릴 게 없다 — '미환급'으로 잘못 보이지 않게 먼저 구분한다
-function voyageRefundState(r) { return r.ins !== 'KB' ? 'NA' : !r.postConfirmed ? 'UNCONF' : (r.refundDone ? 'DONE' : 'PENDING'); }
+// Upfront NCB(선할인)·NCB(후할인) 둘 다 '환급 완료' 또는 '해당 없음'이어야 'DONE'으로 본다(6단계 완료 조건과 동일 기준) —
+// Dashboard·Management·Performance가 같은 판단을 쓰도록 ncbRefundAllSettled(c)를 그대로 가져다 쓴다.
+function voyageRefundState(r) { return r.ins !== 'KB' ? 'NA' : !r.postConfirmed ? 'UNCONF' : (ncbRefundAllSettled(r.c) ? 'DONE' : 'PENDING'); }
 function voyageRefundLabel(r) {
   const st = voyageRefundState(r);
   return st === 'NA' ? '환급 대상 없음' : st === 'UNCONF' ? 'NCB 미확정' : st === 'DONE' ? '환급 완료' : '미환급';
@@ -8774,18 +8850,24 @@ function refundScheduleDisplay(r) {
 }
 // Performance 선박별 실적 전용 — 예정월 이전(일반)/도래(확인 필요, 주황)/경과(지연, 빨강)/완료(초록)로 배지 색을 구분한다.
 // Dashboard 알림(ncbAlertOf)과는 별개 함수다 — Dashboard 표시 방식은 바꾸지 않는다.
+// Upfront NCB(선할인)가 아직 미정산이면 어느 쪽이 걸려 있는지 괄호로 밝힌다(Case 상세에서 바로 확인하도록) —
+// 지연 판정(예정월 경과)은 기존처럼 NCB(후할인) 예정월 기준으로만 본다(선할인은 자체 예정월이 있지만 지연 색상 판정에는 쓰지 않음, 범위 밖).
 function refundBadgeOf(r) {
   if (r.ins !== 'KB') return { label: '환급 대상 없음', cls: '' };
   if (!r.postConfirmed) return { label: 'NCB 미확정', cls: 'navy' };
-  if (r.refundDone) return { label: '환급 완료', cls: 'ok' };
-  if (!r.refundExpectedMonth) return { label: '미환급', cls: '' };
+  const upSettled = r.upfrontRefundNA || r.upfrontRefundDone;
+  const postSettled = r.refundNA || r.refundDone;
+  if (upSettled && postSettled) return { label: '환급 완료', cls: 'ok' };
+  const suffix = postSettled ? ' (선할인)' : upSettled ? ' (후할인)' : ' (선할인·후할인)';
+  if (postSettled) return { label: `미환급${suffix}`, cls: '' };   // 후할인은 끝났고 선할인만 남은 경우 — 지연 판정 대상 아님
+  if (!r.refundExpectedMonth) return { label: `미환급${suffix}`, cls: '' };
   const nowYm = ymd(new Date()).slice(0, 7);
-  if (nowYm < r.refundExpectedMonth) return { label: '미환급', cls: '' };
-  if (nowYm === r.refundExpectedMonth) return { label: '미환급 · 확인 필요', cls: 'warn' };
-  return { label: '환급 지연', cls: 'danger' };
+  if (nowYm < r.refundExpectedMonth) return { label: `미환급${suffix}`, cls: '' };
+  if (nowYm === r.refundExpectedMonth) return { label: `미환급${suffix} · 확인 필요`, cls: 'warn' };
+  return { label: `환급 지연${suffix}`, cls: 'danger' };
 }
-// NCB 환급 대상(KB·NCB 확정·금액 있음)이면서 아직 미환급인 항차만 센다 — Performance 조회 조건 기준
-function isUnpaidRefundTarget(r) { return r.ins === 'KB' && r.postConfirmed && r.totalDiscount > 0 && !r.refundDone; }
+// NCB 환급 대상(KB·NCB 확정·금액 있음)이면서 선할인·후할인 중 하나라도 아직 미환급인 항차만 센다 — Performance 조회 조건 기준
+function isUnpaidRefundTarget(r) { return r.ins === 'KB' && r.postConfirmed && r.totalDiscount > 0 && !ncbRefundAllSettled(r.c); }
 
 // WAR AP 화면과 Performance가 항상 같은 숫자를 보도록, 저장된 결과 필드(pm.pre/pm.post/pm.net 등)를 그대로
 // 믿지 않고 공통 계산 함수(premiumCalc)로 매번 다시 계산한다. 저장된 '입력값'(rate·preRate·seq 등)만 가져다 쓴다.
@@ -8832,8 +8914,11 @@ function ledgerFig(c) {
   return { c, ins, cur, insuredValue, grossRate, gross, pre, post, totalDiscount, postConfirmed, net,
     refundExpected, refundExpectedManual, refundActual, refundUnpaid, refundMonths: refundMonthsOf(c),
     refundState: refundStateKey(c),
-    refundDone, refundExpectedMonth: c.refundExpectedMonth || null, refundActualMonth: c.refundActualMonth || null,
+    refundDone, refundNA: !!c.refundNA, refundExpectedMonth: c.refundExpectedMonth || null, refundActualMonth: c.refundActualMonth || null,
     refundActualDate: c.refundActualDate || null,
+    // Upfront NCB(선할인) 환급 상태 — NCB(후할인)와 완전히 분리된 Case 필드(c.upfrontRefund*)를 그대로 읽는다
+    upfrontRefundDone: !!c.upfrontRefundDone, upfrontRefundNA: !!c.upfrontRefundNA,
+    upfrontRefundExpectedMonth: c.upfrontRefundExpectedMonth || null, upfrontRefundActualDate: c.upfrontRefundActualDate || null,
     // 환급 실적 금액 — 담당자가 직접 입력한 '실제 환급금액'이 있으면 그걸 우선하고, 없으면(예전 방식 Case 등) 계산된 NCB 합계를 쓴다
     refundDoneAmount: refundDone ? (c.refundActualAmount != null ? c.refundActualAmount : totalDiscount) : 0,
     // 실제 환급금액의 통화 — 담당자가 따로 고른 통화가 있으면 그걸 쓰고, 없으면 이 Case의 NCB 산출 통화를 그대로 쓴다
@@ -8865,8 +8950,9 @@ function ledgerFiltered() {
     if (lgFilter.vessel && vkey(c.vessel) !== lgFilter.vessel) return false;
     const ins = c.insurer || vesselInsurer(c.vessel);
     if (lgFilter.insurer && ins !== lgFilter.insurer) return false;
-    if (lgFilter.refund === 'DONE' && !c.refundDone) return false;
-    if (lgFilter.refund === 'PENDING' && c.refundDone) return false;
+    // 선할인·후할인 둘 다 처리(완료 또는 해당없음)됐을 때만 '환급완료'로 본다 — 6단계 완료 조건과 같은 기준
+    if (lgFilter.refund === 'DONE' && !ncbRefundAllSettled(c)) return false;
+    if (lgFilter.refund === 'PENDING' && ncbRefundAllSettled(c)) return false;
     return true;
   });
 }
@@ -8968,7 +9054,7 @@ function vesselCaseDetailHtml(v) {
   let h = `<table class="lgv-detail-table"><thead><tr>
     <th>항차</th><th>HRA IN</th><th>HRA OUT</th><th>보험사</th>
     <th class="num">Gross Premium</th><th class="num">Upfront NCB (선할인)</th><th class="num">NCB (후할인)</th>
-    <th class="num">Total NCB</th><th class="num">Net Premium</th><th>환급 상태</th><th>환급 일정</th><th></th>
+    <th class="num">Total NCB</th><th class="num">Net Premium</th><th>환급 상태</th><th>NCB(후할인) 환급 일정</th><th></th>
   </tr></thead><tbody>`;
   for (const r of sorted) {
     const c = r.c;
@@ -9236,7 +9322,7 @@ function renderLedgerDetailTable() {
     <th>HRA IN</th><th>HRA OUT</th><th>HRA 구역</th><th>체류기간</th>
     <th class="num">부보가액 (Insured Value)</th>
     <th class="num">Gross Premium</th><th class="num">Upfront NCB (선할인)</th><th class="num">NCB (후할인)</th><th class="num">Net Premium</th>
-    <th>환급 상태</th><th>환급 일정</th>
+    <th>NCB(후할인) 환급 상태</th><th>NCB(후할인) 환급 일정</th>
   </tr></thead><tbody>`;
   for (const r of rows) {
     const c = r.c;
@@ -9252,7 +9338,7 @@ function renderLedgerDetailTable() {
         : !r.postConfirmed ? '<span class="pending">NCB 미확정</span>' : (canEdit ? `<select class="lg-inline" data-field="refundDone">
         <option value=""${!r.refundDone ? ' selected' : ''}>미환급</option>
         <option value="DONE"${r.refundDone ? ' selected' : ''}>환급 완료</option>
-      </select>` : esc(r.refundDone ? '환급 완료' : '미환급'))}</td>
+      </select>` : esc(r.refundNA ? '해당 없음' : (r.refundDone ? '환급 완료' : '미환급')))}</td>
       <td>${r.ins !== 'KB' ? '-' : canEdit
         ? (!r.refundDone
           ? `<input type="month" class="lg-inline" data-field="refundExpectedMonth" value="${esc(r.refundExpectedMonth || '')}">`
@@ -9284,7 +9370,7 @@ function exportLedgerCsv() {
   if (!rows.length) { alert('내보낼 내역이 없습니다.'); return; }
   const head = ['선박명', '항차', '보험사', '통화', 'HRA IN', 'HRA OUT', 'HRA 구역', '체류기간(일)',
     '부보가액', 'Gross Premium', 'Upfront NCB (선할인)', 'NCB (후할인)', 'NCB 확정 여부', 'Net Premium',
-    '환급 상태', '환급 일정'];
+    '환급 상태', 'NCB(후할인) 환급 일정'];
   const lines = [head.map(csvCell).join(',')];
   // 통화별로 소수점 자리가 다르다 — USD는 센트 단위를 둘째 자리까지, KRW는 원 단위를 그대로(소수점 없이) 적는다
   const n = (v, cur) => v == null ? '미산출' : (v / minorUnit(cur)).toFixed(cur === 'KRW' ? 0 : 2);
@@ -9407,9 +9493,10 @@ function exportLedgerCsv() {
     if (!c) return;
     const field = input.dataset.field;
     if (field === 'refundDone') {
-      const prev = !!c.refundDone;
+      const prev = c.refundNA ? '해당 없음' : (c.refundDone ? '환급 완료' : '미환급');
       c.refundDone = input.value === 'DONE';
-      addHistory(c, '환급 상태', prev ? '환급 완료' : '미환급', c.refundDone ? '환급 완료' : '미환급');
+      c.refundNA = false;   // 이 칸은 '해당없음'을 고를 수 없다 — 여기서 고르면 해당없음 표시는 풀린다
+      addHistory(c, '환급 상태', prev, c.refundDone ? '환급 완료' : '미환급');
       persist();
       renderLedgerBody();
       return;
