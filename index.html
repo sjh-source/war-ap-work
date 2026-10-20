@@ -3512,6 +3512,41 @@ function bindCaseDetail(box) {
       persist();
       renderAll();
       renderCaseDetail();
+    } else if (e.target.id === 'ncbUpfrontExpectedMonth') {
+      // Upfront NCB(선할인)는 NCB(후할인)와 환급 주기가 달라(1·4·7·10월 vs 4월) 별도 필드로 추적한다 —
+      // c.refundExpectedMonth(후할인용)는 그대로 두고 건드리지 않는다.
+      const prev = c.upfrontRefundExpectedMonth;
+      c.upfrontRefundExpectedMonth = e.target.value || null;
+      addHistory(c, 'Upfront NCB 환급 예정월', monthLabel(prev), monthLabel(c.upfrontRefundExpectedMonth));
+      persist();
+      renderAll();
+      renderCaseDetail();
+    } else if (e.target.id === 'ncbUpfrontRefundDone') {
+      const prev = !!c.upfrontRefundDone;
+      c.upfrontRefundDone = e.target.value === 'DONE';
+      addHistory(c, 'Upfront NCB 환급 상태', prev ? '환급 완료' : '미환급', c.upfrontRefundDone ? '환급 완료' : '미환급');
+      persist();
+      renderAll();
+      renderCaseDetail();
+    } else if (e.target.id === 'ncbUpfrontActualDate') {
+      const prev = c.upfrontRefundActualDate;
+      c.upfrontRefundActualDate = isValidDate(e.target.value) ? e.target.value : null;
+      addHistory(c, 'Upfront NCB 실제 환급일', prev || '-', c.upfrontRefundActualDate || '-');
+      persist();
+      renderAll();
+      renderCaseDetail();
+    } else if (e.target.id === 'ncbUpfrontActualAmount' || e.target.id === 'ncbUpfrontActualCur') {
+      const prevCur = c.upfrontRefundActualCurrency || ledgerFig(c).cur;
+      const prevAmt = c.upfrontRefundActualAmount;
+      const newCur = box.querySelector('#ncbUpfrontActualCur').value || prevCur;
+      const amtRaw = box.querySelector('#ncbUpfrontActualAmount').value;
+      const v = amtRaw === '' ? null : Number(amtRaw);
+      c.upfrontRefundActualCurrency = newCur;
+      c.upfrontRefundActualAmount = Number.isFinite(v) ? rnd(v * minorUnit(newCur)) : null;
+      addHistory(c, 'Upfront NCB 실제 환급금액', prevAmt != null ? fmtMoney(prevAmt, prevCur) : '-', c.upfrontRefundActualAmount != null ? fmtMoney(c.upfrontRefundActualAmount, newCur) : '-');
+      persist();
+      renderAll();
+      renderCaseDetail();
     } else if (e.target.id === 'payStatus3') {
       // 선택만 바꿀 때는 저장하지 않고, 지급일자 칸만 바로 보이거나 숨긴다 — 실제 저장은 「저장」을 눌러야 한다
       const w = box.querySelector('#payDate3Wrap');
@@ -6772,17 +6807,65 @@ function warrantySectionHtml(c, editable) {
   </details>`;
 }
 
+// Upfront NCB(선할인)는 매년 1·4·7·10월, NCB(후할인)는 매년 4월(보험연도 종료 후)로 환급 주기가 다르다
+// (담당자 확인) — 아래 드롭다운을 그 4개 분기로만 제한해서, 날짜를 자유 입력하다가 엉뚱한 달을 고르지
+//않게 한다. '선택 안 함'에 가장 가까운 분기를 참고로만 보여줄 뿐, 그 값을 자동으로 저장하지는 않는다
+// (요청: "환급 예정월이 도래했다는 이유만으로 자동 환급 완료 처리 금지"와 같은 취지 — 추천만, 확정은 사람이).
+function upfrontNcbQuarterOptions() {
+  const nowY = new Date().getFullYear();
+  const opts = [];
+  for (let y = nowY - 1; y <= nowY + 2; y++) ['01', '04', '07', '10'].forEach(m => opts.push(`${y}-${m}`));
+  return opts;
+}
+function nearestUpfrontNcbQuarter() {
+  const d = new Date();
+  const y = d.getFullYear(), m = d.getMonth() + 1;
+  for (const q of [1, 4, 7, 10]) if (q >= m) return `${y}-${String(q).padStart(2, '0')}`;
+  return `${y + 1}-01`;
+}
+function upfrontNcbMonthSelectHtml(id, value) {
+  const opts = upfrontNcbQuarterOptions();
+  if (value && !opts.includes(value)) opts.push(value);   // 이미 저장된 값이 범위 밖이어도 안 사라지게
+  opts.sort();
+  const suggestion = nearestUpfrontNcbQuarter();
+  return `<select id="${id}">
+    <option value="">선택 안 함 (다음 분기 참고: ${esc(monthLabel(suggestion))})</option>
+    ${opts.map(o => `<option value="${o}"${value === o ? ' selected' : ''}>${esc(monthLabel(o))}</option>`).join('')}
+  </select>`;
+}
 // 보험료 산출 내역 바로 아래 — 이 Case(선박·항차)의 NCB 현황과 환급 예정월·완료 여부를 다룬다.
 // Performance 화면과 같은 데이터(c.refundDone/c.refundExpectedMonth/c.refundActualDate)를 그대로 쓴다 — 별도 계산 로직 없음.
 // 예전 방식(c.refundExpected 직접입력·c.refunds 금액 기록)은 지우지 않고 데이터만 보존하며, 참고용으로만 보여준다.
+// Upfront NCB(선할인)·NCB(후할인)는 환급 주기가 서로 달라 환급 추적 필드를 완전히 분리했다(c.upfrontRefund*
+// vs c.refund*) — 하나를 입력해도 다른 쪽 값에는 전혀 영향이 없다.
 function ncbRefundSectionHtml(c) {
   if (!c.premium) return '';   // 아직 보험료 산출 자체가 안 됐으면 환급을 다룰 게 없음
   const lf = ledgerFig(c);
-  if (lf.ins !== 'KB') return '';   // NCB(후할인)는 KB 전용
+  if (lf.ins !== 'KB') return '';   // NCB(선할인·후할인) 모두 KB 전용
   const entries = refundEntries(c);
   const done = !!c.refundDone;
   const needDate = done && !c.refundActualDate;
   const refundCur = c.refundActualCurrency || lf.cur;   // 실제 환급금액의 통화 — NCB 산출 통화(lf.cur)와 별개로 고를 수 있음
+
+  // 선할인 자체가 아직 확정 안 됐으면(Upfront NCB 요율 미입력) 환급 일정을 안내할 근거가 없어 '확인 필요'로만 둔다
+  // — 금액이나 예정월을 임의로 지어내지 않는다.
+  const upfrontConfirmed = c.premium.preRate != null;
+  const upfrontDone = !!c.upfrontRefundDone;
+  const upfrontNeedDate = upfrontDone && !c.upfrontRefundActualDate;
+  const upfrontCur = c.upfrontRefundActualCurrency || lf.cur;
+  const upfrontBlock = !upfrontConfirmed
+    ? '<p class="pending">선할인 요율이 아직 확정되지 않아 Upfront NCB 환급 일정을 안내할 수 없습니다 — 확인 필요.</p>'
+    : `<div class="bar" style="margin-top:10px">
+        <label class="field"><span>환급 예정월</span>${upfrontNcbMonthSelectHtml('ncbUpfrontExpectedMonth', c.upfrontRefundExpectedMonth)}</label>
+        <label class="field"><span>환급 상태</span><select id="ncbUpfrontRefundDone">
+          <option value=""${!upfrontDone ? ' selected' : ''}>미환급</option>
+          <option value="DONE"${upfrontDone ? ' selected' : ''}>환급 완료</option>
+        </select></label>
+        ${upfrontDone ? `<label class="field"><span>실제 환급일</span><input type="date" id="ncbUpfrontActualDate" value="${esc(c.upfrontRefundActualDate || '')}"></label>` : ''}
+        ${upfrontDone ? `<label class="field"><span>실제 환급금액</span><div class="bar" style="gap:4px">${curSelectHtml('ncbUpfrontActualCur', upfrontCur)}<input type="number" id="ncbUpfrontActualAmount" min="0" step="0.01" value="${c.upfrontRefundActualAmount != null ? c.upfrontRefundActualAmount / minorUnit(upfrontCur) : ''}"></div></label>` : ''}
+        ${upfrontNeedDate ? '<span class="pending">실제 환급일을 입력해야 환급 완료 처리가 끝납니다.</span>' : ''}
+      </div>`;
+
   return `<section id="ncbRefundSec">
     <h2>NCB 현황 및 환급 관리</h2>
     <table class="kv"><tbody>
@@ -6790,6 +6873,9 @@ function ncbRefundSectionHtml(c) {
       <tr><th>NCB (후할인)</th><td>${fmtMoney(lf.post, lf.cur)}${!lf.postConfirmed ? ' <span class="muted">(예상 — 후할인 조건 미확정)</span>' : ''}</td></tr>
       <tr><th>NCB 합계</th><td><b>${fmtMoney(lf.totalDiscount, lf.cur)}</b></td></tr>
     </tbody></table>
+    <div class="sub-block-title" style="margin-top:14px">Upfront NCB(선할인) 환급 — 매년 1·4·7·10월</div>
+    ${upfrontBlock}
+    <div class="sub-block-title" style="margin-top:14px">NCB(후할인) 환급 — 매년 4월(보험연도 종료 후)</div>
     <div class="bar" style="margin-top:10px">
       <label class="field"><span>환급 예정월</span><input type="month" id="ncbExpectedMonth" value="${esc(c.refundExpectedMonth || '')}"></label>
       <label class="field"><span>환급 상태</span><select id="ncbRefundDone">
@@ -8351,6 +8437,10 @@ function sanitizeCase(o, usedIds) {
     refundActualDate: dt(o.refundActualDate) || null, refundActualAmount: n(o.refundActualAmount),
     // 실제 환급금액의 통화 — 없으면(예전 데이터) NCB 산출 통화를 그대로 쓴다
     refundActualCurrency: ['USD', 'KRW'].includes(o.refundActualCurrency) ? o.refundActualCurrency : null,
+    // Upfront NCB(선할인) 환급 관리 — NCB(후할인)와 환급 주기가 달라(1·4·7·10월 vs 4월) 완전히 별도로 저장
+    upfrontRefundDone: !!o.upfrontRefundDone, upfrontRefundExpectedMonth: mo(o.upfrontRefundExpectedMonth),
+    upfrontRefundActualDate: dt(o.upfrontRefundActualDate) || null, upfrontRefundActualAmount: n(o.upfrontRefundActualAmount),
+    upfrontRefundActualCurrency: ['USD', 'KRW'].includes(o.upfrontRefundActualCurrency) ? o.upfrontRefundActualCurrency : null,
     // 예전 테스트(가상) 위치 기록은 실제 AIS와 섞이지 않게 버린다
     ais: o.ais && typeof o.ais === 'object' && !/TEST/.test((o.ais.last && o.ais.last.src) || '') && o.ais.simDist == null ? o.ais : null,
     // 보험사 견적 메일 붙여넣기 분석 — 초안(quoteDraft)은 확인 전 임시 상태, warranty는 담당자가 확인·저장한 확정 내용
