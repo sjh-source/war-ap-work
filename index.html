@@ -3522,7 +3522,7 @@ function bindCaseDetail(box) {
     }
   });
   // 업무 흐름 처리: 견적 전달·부보확정·HRA 진입·진출·인보이스·최종보험료·송금
-  const FLOW_ACTS = ['quote-share', 'cover-confirm', 'hra-in-confirm', 'hra-out-confirm',
+  const FLOW_ACTS = ['quote-share', 'cover-confirm', 'cover-confirm-g5', 'hra-in-confirm', 'hra-out-confirm',
     'sched-change-ack', 'g5-select', 'pay-edit', 'pay-cancel', 'pay-save', 'refund-edit', 'refund-cancel', 'refund-save',
     'qm-discard', 'cancel-confirm', 'gmail-sync-now'];
   box.addEventListener('click', e => {
@@ -3542,6 +3542,18 @@ function bindCaseDetail(box) {
       addHistory(c, '변경 스케줄 확인', '', `${esc(currentUser.name)} ${esc(nowStr())}`);
     } else if (act === 'cover-confirm') {
       // 부보 확정: 6 → 7. 부보 확정 → 8. HRA 진입 예정
+      c.coverConfirm = { at: nowStr(), by: currentUser.name, memo: '' };
+      addHistory(c, '보험사 부보 확정', '', INSURERS[c.insurer || vesselInsurer(c.vessel)]);
+      resolveNotifications(c.id, 'COVER_NEEDED');
+      pushNotification(c, 'COVER_CONFIRMED', `보험사(${INSURERS[c.insurer || vesselInsurer(c.vessel)]}) 부보가 확정되었습니다.`, 'SALES', currentUser.team, currentUser.name);
+      step(7);
+      step(8);
+    } else if (act === 'cover-confirm-g5') {
+      // 진행 막대(3단계) 화면에서 직접 처리 — cover-confirm과 저장 내용은 완전히 동일하고, 클릭 시
+      // 확인창만 추가로 띈다(요청: "부보 확정 처리하시겠습니까?"). 영업팀은 여기까지 못 온다(위
+      // coverConfirmGroupActionHtml이 PLAN 아니면 버튼 자체를 안 보여줌) — 그래도 한 번 더 막는다.
+      if (!currentUser || currentUser.team !== 'PLAN') return;
+      if (!confirm('부보 확정 처리하시겠습니까?')) return;
       c.coverConfirm = { at: nowStr(), by: currentUser.name, memo: '' };
       addHistory(c, '보험사 부보 확정', '', INSURERS[c.insurer || vesselInsurer(c.vessel)]);
       resolveNotifications(c.id, 'COVER_NEEDED');
@@ -5772,12 +5784,26 @@ function groupDetailHtml(c) {
   // 5·6단계(보험료 지급·NCB 환급)는 이전 단계가 안 끝났어도 조회 화면 자체는 보여주고, 처리(수정) 버튼만 잠근다(locked)
   if (sel === 4) return `<section class="act-panel"><h2>처리 · 보험료 지급</h2>${payStepHtml(c, !p.done[3])}<span class="msg" id="actMsg"></span></section>`;
   if (sel === 5) return `<section class="act-panel"><h2>처리 · NCB 환급</h2>${refundStepHtml(c, !p.done[4])}<span class="msg" id="actMsg"></span></section>`;
+  // '부보 확정'(index 2)이 지금 진행 중인 단계로 보이는데도 처리 버튼이 없다는 보고가 있어 추가함 —
+  // 기존 stepActionHtml은 옛 14단계 체계(c.step===6, '부보 요청' 메일을 발송 표시해야 함)에서만 버튼을
+  // 보여주는데, 이 요약 막대는 그 메일 발송 여부와 무관하게 진행 중으로 표시될 수 있어서 둘이 어긋났다.
+  // 이 요약 막대 화면에서는 그 선행 조건과 무관하게 바로 처리할 수 있게 한다 — 저장 로직은 cover-confirm과
+  // 완전히 동일한 것을 그대로 재사용(coverConfirmGroupActionHtml 아래 참고).
+  if (sel === 2 && sel === p.idx && !p.done[2]) return coverConfirmGroupActionHtml(c);
   if (sel === p.idx) return stepActionHtml(c);
   if (p.done[sel]) return groupStepSummaryHtml(c, sel);
   if (p.gaps.includes(sel)) return `<p class="muted">이 단계는 처리 기록이 없는데, 더 뒤 단계가 이미 진행돼 있습니다(확인 필요). 실제로 처리된 일이면 해당 작업(예: 「부보 확정 처리」)을 눌러 기록해 주세요.</p>`;
   return '<p class="muted">이전 단계 완료 후 처리 가능합니다.</p>';
 }
 
+// 영업팀에는 처리 버튼을 보여주지 않는다(조회만) — 요청: "영업팀에는 부보 확정 처리 권한을 부여하지 않기".
+function coverConfirmGroupActionHtml(c) {
+  if (!currentUser || currentUser.team !== 'PLAN') return '<p class="muted">부보 확정 처리는 기획/ESG팀만 할 수 있습니다.</p>';
+  return `<section class="act-panel"><h2>처리 · 부보 확정</h2>
+    <p class="muted" style="margin-top:8px">보험사에서 부보 확정 회신을 받았으면 「부보 확정 처리」를 누르세요.</p>
+    <div class="bar" style="margin-top:10px"><button type="button" class="small" data-act="cover-confirm-g5">부보 확정 처리</button>
+      <span class="msg" id="actMsg"></span></div></section>`;
+}
 function stepActionHtml(c) {
   if (c.step === 5) {
     // 이 단계의 '보험사 견적 현황·예상 보험료·Gmail 안내'는 아래 「보험료 산출 내역」·「보험사 발송 메일」 영역에 이미 있어 여기서는 중복 표시하지 않는다.
