@@ -969,9 +969,7 @@
           <label><input type="radio" name="team" value="PLAN"><span>기획/ESG팀</span></label>
         </div>
       </div>
-      <label class="field"><span>이름</span>
-        <select id="loginName"><option value="">소속을 먼저 선택하세요</option></select>
-      </label>
+      <label class="field"><span>이름</span><input type="text" id="loginName" maxlength="30" placeholder="이름을 입력해 주세요"></label>
       <button type="submit" class="block">로그인</button>
       <div class="msg err" id="loginMsg"></div>
       <p class="login-note">비밀번호 없이 소속과 이름으로 들어가는 방식이며, 보안 기능은 아닙니다.</p>
@@ -999,6 +997,8 @@
              0건이어도 로그인할 수 있어야 하므로 Case 상세 화면(quoteMailExtractSectionHtml)이 아니라
              여기(헤더)에 둔다. -->
         <span class="hidden" id="gwLoginArea" style="margin-right:8px"></span>
+        <button type="button" class="sub small hidden" id="cloudSyncBtn" style="margin-right:6px">공용저장 연결 (Google 계정 확인)</button>
+        <span class="muted" id="cloudSyncStatus" style="margin-right:8px;font-size:11px" title="영업팀·기획/ESG팀 간 Case 공용저장(베타) 연결 상태"></span>
         <span class="user-chip" id="userName"></span>
         <button type="button" class="sub small" id="btnLogout">로그아웃</button>
       </div>
@@ -1900,8 +1900,8 @@ async function nameHash(team, name) {
   return sha256Hex(s);
 }
 async function isAllowed(team, name) {
-  // 로그인 화면이 이름을 이 명단(EMPLOYEES)에서만 고르게 하므로, 여기서는 그 선택이 실제로 명단에 있는지만 다시 확인한다.
-  // 이름 선택만으로 실제 신원이 증명되는 것은 아니다(비밀번호 없음) — 보험료 등 민감한 자료는 team(소속) 권한으로 따로 막는다.
+  // 직접 입력한 이름이 그 소속 명단(EMPLOYEES)에 있는지 대조한다.
+  // 이름 입력만으로 실제 신원이 증명되는 것은 아니다(비밀번호 없음) — 보험료 등 민감한 자료는 team(소속) 권한으로 따로 막는다.
   return !!EMPLOYEES[team] && EMPLOYEES[team].includes(String(name).trim());
 }
 
@@ -8144,6 +8144,11 @@ function onRequest(e) {
   // 새 선박·항차가 등록된 그 자리에서 바로 한 번 찾아본다(10분 주기를 기다리지 않음) — 이 PC에
   // gmail-sync 로컬 서버가 없으면 조용히 실패할 뿐이라 안전하다.
   refreshGmailSync(true);
+  // 공용저장(베타)에 연결돼 있으면 같이 올린다 — 연결 안 돼 있거나 실패해도 위의 로컬 저장은
+  // 이미 끝났으므로 이 Case가 사라지거나 저장이 안 되는 일은 없다(이 PC에서는 그대로 보임).
+  if (window.warApCloud) {
+    window.warApCloud.createCase(c).then(ok => { if (ok) { c._cloud = true; renderAll(); } });
+  }
 }
 
 function renderAll() {
@@ -8713,8 +8718,58 @@ function applyView() {
   $('adminTools').classList.toggle('hidden', !u || u.team !== 'PLAN');
   renderGwLoginArea();
   $('userName').textContent = u ? `${u.name} · ${TEAMS[u.team]}` : '';
+  updateCloudSyncButton();
   if (u) showPage(currentPage);
 }
+
+/* ---------- 업무용 클라우드 백엔드(선택 기능) — 연결·반영 ----------
+   본문 끝의 모듈 스크립트 블록(window.warApCloud)이 아직 로딩 전이어도 안전하게 쓸 수 있게
+   warap-cloud-ready 이벤트를 기다린다. 이 블록이 전혀 못 붙어도(서버가 꺼져 있어도) 로그인·Case
+   저장 등 기존 동작에는 영향이 없다 — 화면 상단 표시(cloudSyncStatus)로 연결 여부만 분명히 보여준다. */
+function withCloud(fn) {
+  if (window.warApCloud) fn(window.warApCloud);
+  else window.addEventListener('warap-cloud-ready', () => fn(window.warApCloud), { once: true });
+}
+function connectCloudSync() {
+  if (!currentUser) return;
+  withCloud(cloud => cloud.connect());
+}
+// 로그인 상태이고 아직 연결 전일 때만 "공용저장 연결" 단추를 보여준다. Google 로그인 팝업은
+// 사람이 직접 누른 동작에서만 뜰 수 있어서(브라우저 팝업 차단 때문), 로그인하자마자 자동으로
+// 시도하지 않고 이 단추를 눌렀을 때만 connectCloudSync()를 부른다.
+function updateCloudSyncButton() {
+  const btn = $('cloudSyncBtn');
+  if (!btn) return;
+  const connected = window.warApCloud && window.warApCloud.status === 'connected';
+  btn.classList.toggle('hidden', !currentUser || connected);
+}
+// 공용저장에서 받은 Case를 이 PC의 state.cases에 "추가로만" 합친다 — 이미 이 PC에 로컬로만 있던
+// Case(아직 공용저장에 못 올라간 것 포함)는 절대 지우거나 덮어쓰지 않는다. 한 번이라도 공용저장과
+// 짝지어진(_cloud) Case만, 그 다음부터는 최신 내용으로 갱신한다.
+function mergeCloudCases(remoteList) {
+  const byId = new Map(state.cases.map(c => [c.id, c]));
+  for (const r of remoteList) {
+    const existing = byId.get(r.id);
+    if (existing) {
+      if (existing._cloud) Object.assign(existing, r, { _cloud: true });
+      // else: 이 PC에 이미 로컬로 있는 Case(아직 공용저장과 짝짓기 전) — 안전하게 그대로 둔다.
+    } else {
+      state.cases.push(Object.assign({}, r, { _cloud: true }));
+    }
+  }
+  renderAll();
+}
+window.addEventListener('warap-cloud-status', e => {
+  const el = $('cloudSyncStatus');
+  updateCloudSyncButton();
+  if (!el) return;
+  const { status, error } = e.detail || {};
+  const LABEL = { connecting: '공용저장: 연결 중…', connected: '공용저장: 연결됨(베타)',
+    unregistered: '공용저장: 회사 계정 아님', error: '공용저장: 오류' };
+  el.textContent = LABEL[status] || '';
+  el.title = '영업팀·기획/ESG팀 간 Case 공용저장(베타) 연결 상태' + (error ? ' — ' + error : '');
+  el.classList.toggle('hidden', !LABEL[status]);
+});
 
 function restoreUser() {
   try {
@@ -8725,32 +8780,23 @@ function restoreUser() {
   } catch (err) { currentUser = null; }
 }
 
-// 소속을 고르면 그 소속 명단(EMPLOYEES)으로만 이름 목록을 다시 채우고, 이전에 고른 이름은 비운다.
-function populateLoginNames() {
-  const picked = document.querySelector('input[name="team"]:checked');
-  const list = picked ? (EMPLOYEES[picked.value] || []) : [];
-  $('loginName').innerHTML = `<option value="">${picked ? '이름을 선택하세요' : '소속을 먼저 선택하세요'}</option>` +
-    list.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
-}
-
 async function onLogin(e) {
   e.preventDefault();
   const picked = document.querySelector('input[name="team"]:checked');
   const name = $('loginName').value.trim();
   const errs = [];
   if (!picked) errs.push('소속을 고르세요.');
-  if (!name) errs.push('이름을 고르세요.');
+  if (!name) errs.push('이름을 입력해 주세요.');
   if (errs.length) { $('loginMsg').textContent = errs.join(' '); return; }
   if (!(await isAllowed(picked.value, name))) {
-    $('loginMsg').textContent = '접속 권한이 없습니다. 소속과 이름을 확인하세요.';
+    $('loginMsg').textContent = '소속 또는 이름을 확인해 주세요.';
     return;
   }
   currentUser = { team: picked.value, name };
   storageSet(USER_KEY, JSON.stringify(currentUser));
   $('loginForm').reset();
-  populateLoginNames();
   $('loginMsg').textContent = '';
-  applyView();
+  applyView();   // applyView()가 공용저장 "연결" 단추 표시 여부도 같이 갱신한다(팝업은 직접 눌러야 뜸)
   window.scrollTo(0, 0);
 }
 
@@ -8789,6 +8835,8 @@ function onLogout() {
   setMsg('', '');
   renderAll();
   applyView();
+  // Gmail과 같은 이유로, 공용저장 연결도 로그아웃하면 끊는다(다음 사람이 이전 사람 연결을 물려받지 않게).
+  withCloud(cloud => cloud.disconnect && cloud.disconnect());
 }
 
 function loadJson(file) {
@@ -9649,8 +9697,8 @@ function exportLedgerCsv() {
     if (!$('calMonthPop').classList.contains('hidden') && !inside) closeCalMonthPop();
   });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCalMonthPop(); });
-  document.querySelectorAll('input[name="team"]').forEach(r => r.addEventListener('change', populateLoginNames));
   $('loginForm').addEventListener('submit', onLogin);
+  $('cloudSyncBtn').addEventListener('click', connectCloudSync);
   $('btnLogout').addEventListener('click', onLogout);
   loadStored();
   migrateOldContacts();   // 예전(보험사별 고정 칸) 수신처 자료가 있으면 한 번만 새 구조로 옮긴다
@@ -9659,6 +9707,7 @@ function exportLedgerCsv() {
   if (needPersist) persist();
   restoreUser();
   resetForm();
+  withCloud(cloud => cloud.onCases(mergeCloudCases));
   // 이전에 로그인해 둔 사람도 명단에 있는지 다시 확인
   (async () => {
     if (currentUser && !(await isAllowed(currentUser.team, currentUser.name))) {
@@ -9669,6 +9718,110 @@ function exportLedgerCsv() {
     applyView();
   })();
 })();
+</script>
+
+<!-- ---------- 업무용 클라우드 백엔드 연동 (선택 기능, 기본은 "로컬 저장소 모드"로 그대로 동작) ----------
+     CLAUDE.md 예외(업무용 클라우드 백엔드)에 따라 war-ap-work 자체는 서버 없이도 전부 그대로 동작해야
+     하고, 연결이 끊기면 조용히 로컬로 되돌아가지 않고 화면에 분명히 보여줘야 한다. 그래서 이 블록은:
+     - 기존 저장(storageGet/storageSet/persist)을 대신하지 않는다. 이 블록이 통째로 실패해도
+       (연결을 안 하거나 실패해도) 로그인·Case·보험료 등 기존 기능은 지금까지처럼 로컬로 그대로 동작한다.
+     - 실제로 연결됐을 때만 "영업팀이 올린 신규 요청이 기획/ESG팀 Dashboard에도 뜨는" 기능을 그 위에
+       추가로 얹는다.
+     - 신원 확인은 실제 회사 Google 계정 로그인(Firebase Authentication)으로 한다 — Gmail 읽기 권한은
+       요청하지 않는다(그건 기획/ESG팀의 기존 Gmail 연동과 완전히 별개). 직원별 수동 등록 절차는 없다 —
+       heung-a.co.kr 회사 계정으로 로그인했는지를 서버 코드 없이 Firestore 보안규칙이 직접 확인한다
+       (D:\vibe\cloud-backend\firestore.rules). 보험료 등 민감한 정보는 그 규칙이 아예 Firestore에
+       올라가지 못하게 막아서, 영업팀/기획팀을 따로 구분하지 않아도 새어나갈 정보가 없다. -->
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js';
+import {
+  getFirestore, collection, doc, setDoc, onSnapshot
+} from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
+
+// Firebase Console → 프로젝트 설정 → 일반 → 내 앱(war-ap-work)에서 그대로 복사해 온 값. apiKey 등은
+// 비밀값이 아니다(모든 Firebase 웹앱은 이 값을 브라우저에 그대로 공개한다) — 실제 보호는
+// Firestore 보안규칙(누가 로그인했는지)이 한다.
+const CLOUD = {
+  firebaseConfig: {
+    apiKey: 'AIzaSyAaKdTd0h5dw6uWGp4ae06yvH2mG5tv2v0',
+    authDomain: 'war-ap--sync.firebaseapp.com',
+    projectId: 'war-ap-gmail-sync',
+    storageBucket: 'war-ap-gmail-sync.firebasestorage.app',
+    messagingSenderId: '404087188958',
+    appId: '1:404087188958:web:900cc1364d8ebb461f014f'
+  },
+  // 기획/ESG팀 전용(보험료 등) — D:\vibe\cloud-backend\firestore.rules의 confidentialKeys와
+  // 반드시 같은 목록으로 유지한다. 신규 등록 시 이 필드들은 공용저장으로 보내지 않는다(아직
+  // 보내도 거부되며, 보험료 등은 기획/ESG팀 PC에서 처리하는 기존 방식을 그대로 따른다).
+  confidentialKeys: ['insurer', 'insuredValue', 'premium', 'gross', 'preRate', 'net',
+    'quoteDraft', 'warranty', 'warrantyManualLock', 'coverConfirm',
+    'quoteMail', 'coverMail', 'finalMail', 'invoice', 'invoiceInfo', 'invoiceDocs',
+    'paid', 'refundState', 'refundExpected', 'refunds', 'refundDone',
+    'refundExpectedMonth', 'refundActualMonth', 'refundActualDate', 'refundActualAmount',
+    'refundActualCurrency', 'policyNo', 'endorsementDate']
+};
+
+const fbApp = initializeApp(CLOUD.firebaseConfig);
+const fbAuth = getAuth(fbApp);
+const fbStore = getFirestore(fbApp);
+// Gmail 등 추가 권한은 전혀 요청하지 않는다 — 기본 범위(로그인한 사람의 이메일 확인)만 쓴다.
+const googleProvider = new GoogleAuthProvider();
+
+let casesCb = null, unsubscribeCases = null;
+function notifyStatus() {
+  window.dispatchEvent(new CustomEvent('warap-cloud-status', { detail: { status: warApCloud.status, error: warApCloud.error } }));
+}
+
+const COMPANY_DOMAIN = '@heung-a.co.kr';
+
+const warApCloud = {
+  status: 'idle', error: '',   // idle | connecting | connected | unregistered | error
+  // 직원별 수동 등록은 없다 — 회사 Google Workspace 계정(heung-a.co.kr)으로 로그인했는지만
+  // 확인한다(실제 보호는 firestore.rules가 같은 조건으로 다시 확인한다 — 클라이언트 쪽 확인은
+  // 사용자에게 빨리 알려주기 위한 것일 뿐, 보안의 실제 경계는 서버 쪽 규칙이다).
+  async connect() {
+    this.status = 'connecting'; this.error = ''; notifyStatus();
+    try {
+      const cred = await signInWithPopup(fbAuth, googleProvider);
+      const email = (cred.user.email || '').toLowerCase();
+      if (!cred.user.emailVerified || !email.endsWith(COMPANY_DOMAIN)) {
+        await signOut(fbAuth);
+        this.status = 'unregistered';
+        this.error = `${email} 은 회사(${COMPANY_DOMAIN}) 계정이 아닙니다. 회사 Google 계정으로 다시 시도하세요.`;
+        notifyStatus();
+        return false;
+      }
+      this.status = 'connected'; notifyStatus();
+      if (unsubscribeCases) unsubscribeCases();
+      unsubscribeCases = onSnapshot(collection(fbStore, 'cases'), snap => {
+        if (casesCb) casesCb(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      }, err => { this.status = 'error'; this.error = '공용저장 연결이 끊겼습니다: ' + err.message; notifyStatus(); });
+      return true;
+    } catch (err) {
+      this.status = 'error'; this.error = (err && err.message) || String(err); notifyStatus();
+      return false;
+    }
+  },
+  onCases(cb) { casesCb = cb; },
+  async createCase(caseObj) {
+    if (this.status !== 'connected') return false;
+    const payload = {};
+    for (const k of Object.keys(caseObj)) {
+      if (k === 'id' || CLOUD.confidentialKeys.includes(k)) continue;
+      payload[k] = caseObj[k] === undefined ? null : caseObj[k];
+    }
+    try { await setDoc(doc(fbStore, 'cases', caseObj.id), payload); return true; }
+    catch (err) { this.status = 'error'; this.error = '공용저장에 올리지 못했습니다: ' + err.message; notifyStatus(); return false; }
+  },
+  async disconnect() {
+    if (unsubscribeCases) { unsubscribeCases(); unsubscribeCases = null; }
+    try { await signOut(fbAuth); } catch (err) { /* 이미 로그아웃 상태면 무시 */ }
+    this.status = 'idle'; this.error = ''; notifyStatus();
+  }
+};
+window.warApCloud = warApCloud;
+window.dispatchEvent(new Event('warap-cloud-ready'));
 </script>
 </body>
 </html>
