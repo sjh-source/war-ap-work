@@ -969,7 +969,9 @@
           <label><input type="radio" name="team" value="PLAN"><span>기획/ESG팀</span></label>
         </div>
       </div>
-      <label class="field"><span>이름</span><input type="text" id="loginName" maxlength="30"></label>
+      <label class="field"><span>이름</span>
+        <select id="loginName"><option value="">소속을 먼저 선택하세요</option></select>
+      </label>
       <button type="submit" class="block">로그인</button>
       <div class="msg err" id="loginMsg"></div>
       <p class="login-note">비밀번호 없이 소속과 이름으로 들어가는 방식이며, 보안 기능은 아닙니다.</p>
@@ -1839,8 +1841,11 @@ const TEAMS = { SALES: '영업팀', PLAN: '기획/ESG팀' };
 const STORAGE_KEY = 'war-ap.data.v1';
 const USER_KEY = 'war-ap.user.v1';
 
-// 공개 저장소로 나가는 파일: 사내 직원 해시 명단을 넣지 않는다. 소속만 고르면 들어갈 수 있다(아래 isAllowed 참고).
-const ALLOWED = { PLAN: [], SALES: [] };
+// 로그인 가능한 실제 직원 명단(소속별) — 로그인 화면의 이름 목록도 이 명단만 보여준다.
+const EMPLOYEES = {
+  SALES: ['전주호', '송원문', '강정훈', '송재용', '안재우', '김천수', '백승관', '최정헌'],
+  PLAN: ['김광연', '오현석', '박서연', '김동환', '서재희', '차동준']
+};
 
 // SHA-256 (브라우저 기본 기능이 없을 때 쓰는 예비 계산)
 function sha256Hex(str) {
@@ -1895,8 +1900,9 @@ async function nameHash(team, name) {
   return sha256Hex(s);
 }
 async function isAllowed(team, name) {
-  // 공개 저장소로 나가는 파일: 사내 명단 대조 없이 소속 선택만 확인한다 (원래도 비밀번호 없는 화면 구분용이었음).
-  return !!TEAMS[team] && !!String(name).trim();
+  // 로그인 화면이 이름을 이 명단(EMPLOYEES)에서만 고르게 하므로, 여기서는 그 선택이 실제로 명단에 있는지만 다시 확인한다.
+  // 이름 선택만으로 실제 신원이 증명되는 것은 아니다(비밀번호 없음) — 보험료 등 민감한 자료는 team(소속) 권한으로 따로 막는다.
+  return !!EMPLOYEES[team] && EMPLOYEES[team].includes(String(name).trim());
 }
 
 let state = { cases: [], history: [], vesselTz: {}, postTables: [], contacts: [], notifications: [] };   // vesselTz: 선박별 본선 시간 기준 (관리자 설정), contacts: 보험사 수신처(공통 연락처), notifications: 부서간 협업 알림
@@ -7201,7 +7207,10 @@ function cancelSectionHtml(c) {
       ${cl.status === 'REQUESTED' ? '<p class="muted" style="margin-top:8px">보험사로부터 취소가 확인되기 전까지는 보험계약이 취소된 것으로 처리하지 않습니다. 기획/ESG팀 확인을 기다리고 있습니다.</p>' : ''}
     </div>`;
   }
-  if (!canCancelAtAll(c)) return '';
+  if (!canCancelAtAll(c)) return `<div class="detail-sec">
+    <h3>요청 관리</h3>
+    <p class="muted" style="margin-top:8px">이미 보험사 부보 확정 처리가 완료되어 영업팀에서 직접 취소할 수 없습니다. 취소가 필요하면 기획/ESG팀에 확인을 요청하세요.</p>
+  </div>`;
   return `<div class="detail-sec">
     <h3>요청 관리</h3>
     <div class="bar">
@@ -7735,7 +7744,7 @@ function scheduleHtml(labels) {
 
 function schedQ(root, cls) { return root.querySelector('.' + cls); }
 
-// actualLabel이 있으면(eta·etd만) 실제 도착/출항 확인 체크박스를 날짜·시간 아래에 덧붙인다 — ETB는 해당 없음
+// actualLabel이 있으면(eta·etd만) 실제 입항일시/출항일시 확인 체크박스를 날짜·시간 아래에 덧붙인다 — ETB는 해당 없음
 function addPortRow(root) {
   const tr = document.createElement('tr');
   const pair = (k, actualLabel) => `<div class="dt-pair"><input type="text" class="in-date p-${k}-d" ${DATE_ATTR}>` +
@@ -7746,7 +7755,7 @@ function addPortRow(root) {
     <td class="p-no"></td>
     <td><input type="text" class="p-port" list="portList" autocomplete="off"></td>
     <td class="p-zone">-</td>
-    <td>${pair('eta', '실제 도착')}</td><td>${pair('etb')}</td><td>${pair('etd', '실제 출항')}</td>
+    <td>${pair('eta', '실제 입항일시')}</td><td>${pair('etb')}</td><td>${pair('etd', '실제 출항일시')}</td>
     <td><button type="button" class="link-btn p-del">삭제</button></td>`;
   schedQ(root, 's-ports').appendChild(tr);
   renumberPorts(root);
@@ -7809,7 +7818,7 @@ function readSchedule(root) {
     ports: [...schedQ(root, 's-ports').querySelectorAll('tr')].map(tr => {
       const p = { port: g(tr, 'p-port') };
       for (const [k] of PORT_STEPS) { p[k + 'D'] = g(tr, `p-${k}-d`); p[k + 'T'] = g(tr, `p-${k}-t`); }
-      // 실제 도착·출항 확인(ETB는 해당 없음)
+      // 실제 입항일시·출항일시 확인(ETB는 해당 없음)
       p.etaActual = chk(tr, 'p-eta-actual');
       p.etdActual = chk(tr, 'p-etd-actual');
       return p;
@@ -7865,8 +7874,8 @@ function validateSchedule(s, errs, opts) {
         chkOpt(p[k + 'D'], `${no} ${label} 날짜`, isValidDate, 'YYYY-MM-DD');
         chkOpt(p[k + 'T'], `${no} ${label} 시간`, isValidTime, 'HH:MM (24시간)');
       }
-      if (p.etaActual && !p.etaD) errs.push(`${no}: 실제 도착 체크 시 ETA 날짜를 입력하세요.`);
-      if (p.etdActual && !p.etdD) errs.push(`${no}: 실제 출항 체크 시 ETD 날짜를 입력하세요.`);
+      if (p.etaActual && !p.etaD) errs.push(`${no}: 실제 입항일시 체크 시 ETA 날짜를 입력하세요.`);
+      if (p.etdActual && !p.etdD) errs.push(`${no}: 실제 출항일시 체크 시 ETD 날짜를 입력하세요.`);
       if (errs.length > before) return;
       // 셋 다 시간까지 있으면 현지시간끼리, 아니면(시간이 하나라도 없으면) 날짜만으로 순서를 비교한다 — 둘 다 입력된 경우만 비교(선택 항목이라 비어 있을 수 있음)
       const eta = joinDT(p.etaD, p.etaT), etb = joinDT(p.etbD, p.etbT), etd = joinDT(p.etdD, p.etdT);
@@ -8716,13 +8725,21 @@ function restoreUser() {
   } catch (err) { currentUser = null; }
 }
 
+// 소속을 고르면 그 소속 명단(EMPLOYEES)으로만 이름 목록을 다시 채우고, 이전에 고른 이름은 비운다.
+function populateLoginNames() {
+  const picked = document.querySelector('input[name="team"]:checked');
+  const list = picked ? (EMPLOYEES[picked.value] || []) : [];
+  $('loginName').innerHTML = `<option value="">${picked ? '이름을 선택하세요' : '소속을 먼저 선택하세요'}</option>` +
+    list.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+}
+
 async function onLogin(e) {
   e.preventDefault();
   const picked = document.querySelector('input[name="team"]:checked');
   const name = $('loginName').value.trim();
   const errs = [];
   if (!picked) errs.push('소속을 고르세요.');
-  if (!name) errs.push('이름을 넣으세요.');
+  if (!name) errs.push('이름을 고르세요.');
   if (errs.length) { $('loginMsg').textContent = errs.join(' '); return; }
   if (!(await isAllowed(picked.value, name))) {
     $('loginMsg').textContent = '접속 권한이 없습니다. 소속과 이름을 확인하세요.';
@@ -8731,6 +8748,7 @@ async function onLogin(e) {
   currentUser = { team: picked.value, name };
   storageSet(USER_KEY, JSON.stringify(currentUser));
   $('loginForm').reset();
+  populateLoginNames();
   $('loginMsg').textContent = '';
   applyView();
   window.scrollTo(0, 0);
@@ -9631,6 +9649,7 @@ function exportLedgerCsv() {
     if (!$('calMonthPop').classList.contains('hidden') && !inside) closeCalMonthPop();
   });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCalMonthPop(); });
+  document.querySelectorAll('input[name="team"]').forEach(r => r.addEventListener('change', populateLoginNames));
   $('loginForm').addEventListener('submit', onLogin);
   $('btnLogout').addEventListener('click', onLogout);
   loadStored();
