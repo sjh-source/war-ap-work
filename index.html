@@ -981,8 +981,6 @@
   .draft-doc .dd-formula small { display: block; }
   .draft-doc .dd-red { color: #c00; font-weight: 700; }
   .draft-doc .dd-attach { margin-top: 20px; outline: none; }
-  .draft-split-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
-  .draft-split-row input { width: 64px; border: 1px solid #999; }
   @media print {
     /* #draftModalBackdrop는 body 바로 아래가 아니라 화면 깊숙이 있는 요소라 display:none으로 조상을 지우면
        그 안의 모달도 같이 사라진다 — 그래서 display 대신 visibility를 쓰고, 모달에서만 다시 보이게 한다.
@@ -4058,18 +4056,6 @@ function bindCaseDetail(box) {
   // 기안 작성 모달 바깥(배경)을 누르면 닫기
   box.addEventListener('click', e => {
     if (e.target.id === 'draftModalBackdrop') { draftOpenFor = null; renderCaseDetail(); }
-  });
-  // 분담 비율(%) — 입력하는 대로 Case에 저장. 전체를 다시 그리지 않고 금액 쪽만 고쳐서, 기안문 제목·본문에
-  // 입력 중인 다른 수정이 지워지지 않게 한다.
-  box.addEventListener('input', e => {
-    if (e.target.id !== 'draftCompanyPct') return;
-    const c = caseId ? findCase(caseId) : null;
-    if (!c) return;
-    const raw = e.target.value;
-    const v = raw === '' ? null : Number(raw);
-    c.draftCompanyPct = Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : null;
-    persist();
-    draftSplitUpdateDom(box, c, draftModel(c));
   });
 }
 
@@ -7160,8 +7146,8 @@ function finalPremiumTable(c) {
 
 /* ================= 기안 작성 (보험료 지급 내부 결재 문서) =================
    이미 산출·저장되어 있는 보험료(c.premium → premiumCalc 결과)와 운항 일정(c.entryDate 등, c.ports)을
-   그대로 가져와 문서 형태로 보여준다. 여기서 새로 계산하거나 다른 화면에 쓰는 값을 바꾸지 않는다.
-   Case에 새로 쓰는 값은 draftCompanyPct(당사 분담 비율 %) 하나뿐 — 그 외에는 아무 것도 저장하지 않는다. */
+   그대로 가져와 문서 형태로 보여준다. 여기서 새로 계산하거나 다른 화면에 쓰는 값을 바꾸지 않고, Case에 새로
+   쓰는 값도 없다(읽기만 한다). */
 // HRA IN/OUT 한 줄 — buildFinalMail_KB의 같은 형식(시간 LT (UTC 오프셋), 날짜)을 그대로 따른다(중복이지만
 // 그 메일 함수는 발송용 문자열 전체를 만들기 때문에 이 문서용으로 값만 떼어 쓸 수 없어 별도로 둔다).
 function draftPointLine(c, which) {
@@ -7271,7 +7257,6 @@ function draftModel(c) {
     });
   }
   const ncbTotal = r.totalDiscount != null ? ddMoney(r.totalDiscount, r.cur) : null;
-  const splitApplicable = c.payer === 'CHARTERER';
   const files = draftAttachFiles(c);
   const shipVoy = `${esc(c.vessel || '')}호 ${esc(c.voyage || '')}항차`;
   const attach = files.length
@@ -7279,34 +7264,7 @@ function draftModel(c) {
     : c.invoice
     ? `※ 첨부 : ${shipVoy} WAR AP 인보이스 外 1부 (총 2부) "끝".`
     : `※ 첨부 : ${DD_PENDING} (첨부 서류를 직접 입력하세요)`;
-  return { c, title, reason, periodLine, inLine, outLine, portLines, grossRow, isKB, ncbRows, ncbTotal,
-    cur: r.cur, net: r.net, splitApplicable, attach };
-}
-function draftSplitHtml(c, d) {
-  if (!d.splitApplicable) return '';
-  const pct = c.draftCompanyPct;
-  const chartererPct = pct != null ? 100 - pct : null;
-  const amt = p => (d.net != null && p != null) ? ddMoney(Math.round(d.net * p / 100), d.cur) : DD_PENDING;
-  return `<div class="dd-sec">
-    <span class="dd-sec-title">보험료 부담 주체 및 분담 내용</span> (${esc(payerText(c))})
-    <div class="draft-split-row draft-no-print">
-      당사 분담 비율 <input type="number" id="draftCompanyPct" min="0" max="100" step="any" value="${pct != null ? esc(pct) : ''}" placeholder="%">%
-      <span id="draftChartererPctHint">(Charterer ${chartererPct != null ? chartererPct : '-'}%)</span>
-    </div>
-    <div class="dd-sub" id="draftAmtCharterer">Charterer 부담금 : ${amt(chartererPct)}</div>
-    <div class="dd-sub" id="draftAmtCompany">당사 부담금 : ${amt(pct)}</div>
-  </div>`;
-}
-// 분담 비율(%) 입력칸을 고칠 때 — 기안문 전체를 다시 그리면 제목·본문에 입력 중인 다른 수정이 지워지므로,
-// 분담 금액 쪽 DOM만 직접 고친다(renderCaseDetail 호출 없음).
-function draftSplitUpdateDom(box, c, d) {
-  const pct = c.draftCompanyPct;
-  const chartererPct = pct != null ? 100 - pct : null;
-  const amt = p => (d.net != null && p != null) ? ddMoney(Math.round(d.net * p / 100), d.cur) : DD_PENDING;
-  const put = (id, html) => { const el = box.querySelector('#' + id); if (el) el.innerHTML = html; };
-  put('draftChartererPctHint', `(Charterer ${chartererPct != null ? chartererPct : '-'}%)`);
-  put('draftAmtCharterer', `Charterer 부담금 : ${amt(chartererPct)}`);
-  put('draftAmtCompany', `당사 부담금 : ${amt(pct)}`);
+  return { c, title, reason, periodLine, inLine, outLine, portLines, grossRow, isKB, ncbRows, ncbTotal, attach };
 }
 function draftModalHtml(c) {
   const d = draftModel(c);
@@ -7345,7 +7303,6 @@ function draftModalHtml(c) {
         <div class="dd-sec" contenteditable="true"><span class="dd-no">1.</span> <span class="dd-sec-title">추가 전쟁위험 담보 적용 기간</span> : ${d.periodLine}</div>
         ${scheduleLines}
         <div class="dd-sec"><span class="dd-no">2.</span> <span class="dd-sec-title">추가 전쟁위험 총 보험료</span>${table}</div>
-        ${draftSplitHtml(c, d)}
         <div class="dd-sec"><span class="dd-no">3.</span> <span class="dd-sec-title">NCB 예상 금액</span>${ncbTable}</div>
         <div class="dd-attach" contenteditable="true">${d.attach}</div>
       </div>
