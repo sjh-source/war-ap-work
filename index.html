@@ -9916,8 +9916,8 @@ function renderLedgerDetailTable() {
     <th>HRA IN</th><th>HRA OUT</th><th>HRA 구역</th><th>체류기간</th>
     <th class="num">부보가액 (Insured Value)</th>
     <th class="num">Gross Premium</th><th class="num">Upfront NCB (선할인)</th><th class="num">NCB (후할인)</th><th class="num">Net Premium</th>
-    <th>Upfront NCB(선할인) 환급 상태</th><th>Upfront NCB(선할인) 환급 일정</th>
-    <th>NCB(후할인) 환급 상태</th><th>NCB(후할인) 환급 일정</th>
+    <th>Upfront NCB(선할인) 환급 상태</th><th>Upfront NCB(선할인) 환급 일정</th><th class="num">Upfront NCB(선할인) 환급액</th>
+    <th>NCB(후할인) 환급 상태</th><th>NCB(후할인) 환급 일정</th><th class="num">NCB(후할인) 환급액</th>
   </tr></thead><tbody>`;
   for (const r of rows) {
     const c = r.c;
@@ -9939,6 +9939,7 @@ function renderLedgerDetailTable() {
           ? `<input type="month" class="lg-inline" data-field="upfrontRefundExpectedMonth" value="${esc(r.upfrontRefundExpectedMonth || '')}">`
           : `<input type="date" class="lg-inline" data-field="upfrontRefundActualDate" value="${esc(r.upfrontRefundActualDate || '')}">${!r.upfrontRefundActualDate ? ' <span class="pending">확인 필요</span>' : ''}`)
         : esc(upfrontRefundScheduleDisplay(r))}</td>
+      <td class="num">${r.ins !== 'KB' || !r.upfrontRefundDone ? '-' : fmtMoney(r.upfrontRefundDoneAmount, r.upfrontRefundCur)}</td>
       <td>${r.ins !== 'KB' ? '<span class="muted">환급 대상 없음</span>'
         : !r.postConfirmed ? '<span class="pending">NCB 미확정</span>' : (canEdit ? `<select class="lg-inline" data-field="refundDone">
         <option value=""${!r.refundDone ? ' selected' : ''}>미환급</option>
@@ -9949,6 +9950,7 @@ function renderLedgerDetailTable() {
           ? `<input type="month" class="lg-inline" data-field="refundExpectedMonth" value="${esc(r.refundExpectedMonth || '')}">`
           : `<input type="date" class="lg-inline" data-field="refundActualDate" value="${esc(r.refundActualDate || '')}">${!r.refundActualDate ? ' <span class="pending">확인 필요</span>' : ''}`)
         : esc(refundScheduleDisplay(r))}</td>
+      <td class="num">${r.ins !== 'KB' || !r.refundDone ? '-' : fmtMoney(r.refundDoneAmount, r.refundCur)}</td>
     </tr>`;
   }
   $('lgDetailTable').innerHTML = h + '</tbody></table>';
