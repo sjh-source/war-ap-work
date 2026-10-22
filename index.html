@@ -8974,11 +8974,18 @@ function persist() {
 // 내용이 같으면 그냥 같은 값을 다시 쓸 뿐 문제되지 않는다.
 let cloudSyncTimer = null;
 function scheduleCloudSync() {
-  if (!window.warApCloud || window.warApCloud.status !== 'connected') return;
+  if (!window.warApCloud || window.warApCloud.status !== 'connected') {
+    console.log('[공용저장] 올리기 건너뜀 — 연결 상태 아님 (status=' + (window.warApCloud ? window.warApCloud.status : '(없음)') + ')');
+    return;
+  }
   clearTimeout(cloudSyncTimer);
   cloudSyncTimer = setTimeout(() => {
+    console.log(`[공용저장] Case ${state.cases.length}건 올리기 시작`);
     for (const c of state.cases) {
-      window.warApCloud.createCase(c).then(ok => { if (ok) c._cloud = true; });
+      window.warApCloud.createCase(c).then(ok => {
+        if (ok) { c._cloud = true; console.log(`[공용저장] "${c.vessel}/${c.voyage}" 올림 성공`); }
+        else console.warn(`[공용저장] "${c.vessel}/${c.voyage}" 올리기 실패 — status=${window.warApCloud.status}, error=${window.warApCloud.error}`);
+      });
     }
   }, 1200);
 }
@@ -9075,6 +9082,7 @@ function updateCloudSyncButton() {
 // Case(아직 공용저장에 못 올라간 것 포함)는 절대 지우거나 덮어쓰지 않는다. 한 번이라도 공용저장과
 // 짝지어진(_cloud) Case만, 그 다음부터는 최신 내용으로 갱신한다.
 function mergeCloudCases(remoteList) {
+  console.log(`[공용저장] mergeCloudCases 호출 — 서버 Case ${remoteList.length}건, 이 PC에 이미 있는 Case ${state.cases.length}건`);
   const byId = new Map(state.cases.map(c => [c.id, c]));
   for (const r of remoteList) {
     const existing = byId.get(r.id);
@@ -9085,6 +9093,10 @@ function mergeCloudCases(remoteList) {
       state.cases.push(Object.assign({}, r, { _cloud: true }));
     }
   }
+  // persist()가 아니라 localStorage만 직접 쓴다 — persist()를 부르면 scheduleCloudSync()가 다시 돌아
+  // 방금 받은 걸 그대로 다시 올려보내는(불필요한 왕복) 일이 생긴다. 받은 내용은 이 PC에도 그대로
+  // 남겨 둬야(새로고침해도 안 사라지게) 하므로 저장 자체는 한다.
+  storageSet(STORAGE_KEY, JSON.stringify({ app: 'war-ap', version: 1, savedAt: nowStr(), cases: state.cases, history: state.history, vesselTz: state.vesselTz, postTables: state.postTables, contacts: state.contacts, notifications: state.notifications }));
   renderAll();
 }
 window.addEventListener('warap-cloud-status', e => {
@@ -10155,7 +10167,7 @@ function exportLedgerCsv() {
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js';
 import {
-  getFirestore, collection, doc, setDoc, onSnapshot
+  initializeFirestore, collection, doc, setDoc, onSnapshot
 } from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
 
 // Firebase Console → 프로젝트 설정 → 일반 → 내 앱(war-ap-work)에서 그대로 복사해 온 값. apiKey 등은
@@ -10176,7 +10188,11 @@ const CLOUD = {
 
 const fbApp = initializeApp(CLOUD.firebaseConfig);
 const fbAuth = getAuth(fbApp);
-const fbStore = getFirestore(fbApp);
+// Case 객체는 속에 ports·quoteMail·schedLatest 같은 중첩 구조가 많고, 그 안에 아직 안 채워진
+// 값은 보통 undefined로 남는다 — Firestore는 기본적으로 undefined가 있으면 그 문서 전체를
+// 거부한다(조용히 실패하는 게 아니라 쓰기 자체가 에러로 끝남). ignoreUndefinedProperties로
+// 그런 값만 자동으로 건너뛰게 한다(원래 값을 지우거나 바꾸는 게 아니라, 그냥 안 보내는 것뿐).
+const fbStore = initializeFirestore(fbApp, { ignoreUndefinedProperties: true });
 // Gmail 등 추가 권한은 전혀 요청하지 않는다 — 기본 범위(로그인한 사람의 이메일 확인)만 쓴다.
 const googleProvider = new GoogleAuthProvider();
 
@@ -10202,8 +10218,12 @@ async function activateForUser(user) {
   warApCloud.status = 'connected'; warApCloud.error = ''; notifyStatus();
   if (unsubscribeCases) unsubscribeCases();
   unsubscribeCases = onSnapshot(collection(fbStore, 'cases'), snap => {
+    console.log(`[공용저장] 서버에서 Case ${snap.size}건 받음`);
     if (casesCb) casesCb(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-  }, err => { warApCloud.status = 'error'; warApCloud.error = '공용저장 연결이 끊겼습니다: ' + err.message; notifyStatus(); });
+  }, err => {
+    console.error('[공용저장] 구독 오류', err);
+    warApCloud.status = 'error'; warApCloud.error = '공용저장 연결이 끊겼습니다: ' + err.message; notifyStatus();
+  });
 }
 
 const warApCloud = {
