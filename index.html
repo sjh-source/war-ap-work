@@ -6348,7 +6348,7 @@ async function gwGmailGet(path) {
 }
 function gwBuildQuery() {
   const kw = '(' + GW_KEYWORDS.map(k => `subject:"${k}"`).join(' OR ') + ')';
-  return `newer_than:30d -in:sent -in:drafts -in:spam -in:trash ${kw}`;
+  return `newer_than:90d -in:sent -in:drafts -in:spam -in:trash ${kw}`;
 }
 function gwGetXlsxCells(arrayBuffer) {
   const wb = XLSX.read(arrayBuffer, { type: 'array' });
