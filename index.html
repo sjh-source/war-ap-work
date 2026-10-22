@@ -708,7 +708,11 @@
   .warranty-row-text { flex: 1 1 320px; line-height: 1.6; }
   .warranty-row-check { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 12px; }
   .warranty-row-check label { display: flex; align-items: center; gap: 4px; white-space: nowrap; cursor: pointer; }
-  .warranty-row-col { flex-direction: column; align-items: stretch; }
+  /* 세로 배치(영업팀 확인 화면)로 바뀌면 flex-direction이 column이 되면서, 가로용으로 잡아 둔
+     .warranty-row-text의 flex-basis(320px)가 "너비"가 아니라 "높이" 최소값으로 작용해 조건 한 칸이
+     화면 대부분을 차지하던 문제가 있었다 — 세로 모드에서는 내용 높이만큼만 차지하도록 되돌린다. */
+  .warranty-row-col { flex-direction: column; align-items: stretch; gap: 4px; padding-bottom: 10px; }
+  .warranty-row-col .warranty-row-text { flex: 0 0 auto; }
   .wc-reason { font-size: 12px; width: 100%; margin-top: 4px; font-family: inherit; resize: vertical; }
   .mail-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
   .mail-top h2 { margin: 0; }
@@ -952,21 +956,33 @@
   /* 기안문(보험료 지급 내부 결재 문서) 미리보기 — 카드형 UI가 아니라 실제 문서처럼 흰 배경·검은 글자로 */
   .draft-modal-panel { background: #fff; width: min(920px, 100%); max-height: 90vh; overflow-y: auto;
     padding: 22px 26px; border-radius: var(--r); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25); }
-  .draft-doc { background: #fff; color: #000; padding: 28px 34px; border: 1px solid var(--line-strong);
-    line-height: 1.9; font-size: 14px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .draft-doc .dd-title { font-size: 17px; font-weight: 700; text-align: center; margin-bottom: 18px; outline: none; }
-  .draft-doc .dd-title:focus, .draft-doc .dd-body:focus { background: var(--navy-50); }
+  /* 문서 전체가 글꼴·글자 크기 하나로 통일되도록, 안의 모든 요소(입력칸 포함)에 font 속성을 강제로 물려준다 —
+     기본적으로 <input>은 글자를 상속하지 않아 문장 사이에 섞이면 크기가 튀어 보인다(실제로 보고받은 문제). */
+  .draft-doc, .draft-doc * { font-family: inherit; font-size: 15px; color: #000; box-sizing: border-box; }
+  .draft-doc { background: #fff; padding: 30px 36px; border: 1px solid var(--line-strong);
+    line-height: 2; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .draft-doc .dd-infobox { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+  .draft-doc .dd-infobox th, .draft-doc .dd-infobox td { border: 1px solid #000; padding: 6px 10px; text-align: left; line-height: 1.6; }
+  .draft-doc .dd-infobox th { background: #f2f2f2; font-weight: 700; width: 110px; white-space: nowrap; }
+  .draft-doc .dd-infobox td[contenteditable] { outline: none; }
+  .draft-doc .dd-infobox td[contenteditable]:empty::before { content: attr(data-placeholder); color: #999; }
   .draft-doc .dd-no { font-weight: 700; }
-  .draft-doc .dd-sec { margin-top: 16px; outline: none; white-space: pre-wrap; }
+  .draft-doc .dd-reason { margin-top: 4px; outline: none; white-space: pre-wrap; text-indent: 1em; }
+  .draft-doc .dd-sec { margin-top: 20px; outline: none; white-space: pre-wrap; }
+  .draft-doc .dd-sec-title { font-weight: 700; }
+  .draft-doc .dd-sub { margin-top: 2px; padding-left: 1.6em; }
   .draft-doc .dd-hi { background: #fff6a3; padding: 1px 2px; }
-  .draft-doc table.dd-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-  .draft-doc table.dd-table th, .draft-doc table.dd-table td { border: 1px solid #000; padding: 6px 8px; font-size: 13px; }
+  .draft-doc table.dd-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  .draft-doc table.dd-table th, .draft-doc table.dd-table td { border: 1px solid #000; padding: 8px 10px; }
   .draft-doc table.dd-table th { background: #eee; font-weight: 700; text-align: center; }
   .draft-doc table.dd-table td.num { text-align: right; }
+  .draft-doc table.dd-table td.ctr { text-align: center; }
+  .draft-doc .dd-formula { line-height: 1.5; }
+  .draft-doc .dd-formula small { display: block; }
   .draft-doc .dd-red { color: #c00; font-weight: 700; }
-  .draft-doc .dd-attach { margin-top: 18px; font-size: 13px; }
-  .draft-split-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 13px; }
-  .draft-split-row input { width: 64px; }
+  .draft-doc .dd-attach { margin-top: 20px; outline: none; }
+  .draft-split-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  .draft-split-row input { width: 64px; border: 1px solid #999; }
   @media print {
     /* #draftModalBackdrop는 body 바로 아래가 아니라 화면 깊숙이 있는 요소라 display:none으로 조상을 지우면
        그 안의 모달도 같이 사라진다 — 그래서 display 대신 visibility를 쓰고, 모달에서만 다시 보이게 한다.
@@ -3429,8 +3445,6 @@ function bindCaseDetail(box) {
       if (!custom) box.querySelector('#pmRatePeriod').value = rpSel.value;
     }
     const p = readPremiumInputs(box);
-    const pmMethodEl = box.querySelector('.pm-method');
-    if (pmMethodEl) pmMethodEl.classList.toggle('hidden', !(p.ratePeriod && p.days > p.ratePeriod));
     const put = (id, html) => { const el = box.querySelector('#' + id); if (el) el.innerHTML = html; };
     const ins = c.insurer || vesselInsurer(c.vessel);
     if (ins === 'KB') {
@@ -5486,7 +5500,7 @@ function savePremium(c, p, r) {
   const prev = c.premium && c.premium.net != null ? `Net ${fmtMoney(c.premium.net, c.premium.cur)}`
     : c.premium && c.premium.pay != null ? fmtMoney(c.premium.pay, c.premium.cur) : '';
   c.premium = {
-    rate: p.rate, ratePeriod: p.ratePeriod, days: p.days, method: (p.ratePeriod && p.days > p.ratePeriod) ? p.method : '',
+    rate: p.rate, ratePeriod: p.ratePeriod, days: p.days, method: p.method || '',
     grossOverride: p.grossOverride, units: r.units, cur: r.cur, siAmt: r.si.amt,
     pay: r.pay, gross: r.gross,
     preRate: p.preRate, preAmountOverride: p.preAmountOverride, pre: r.pre, afterPre: r.afterPre,
@@ -6152,11 +6166,11 @@ function meritzPremiumPanelHtml(c, si, p, r) {
           </select></label>
         <label class="field pm-rp-custom${rpSel === 'CUSTOM' ? '' : ' hidden'}"><span>Rate Period 직접 입력 (Days)</span>
           <input type="number" id="pmRatePeriod" step="1" min="1" value="${p.ratePeriod != null ? esc(p.ratePeriod) : ''}"></label>
-        <label class="field pm-method${p.ratePeriod && p.days > p.ratePeriod ? '' : ' hidden'}"><span>Pro Rata 여부</span>
+        <label class="field"><span>Pro-rata 적용 여부</span>
           <select id="pmMethod">
             <option value="">선택</option>
-            <option value="PRORATA"${p.method === 'PRORATA' ? ' selected' : ''}>Pro Rata 적용</option>
-            <option value="NOPRORATA"${p.method === 'NOPRORATA' ? ' selected' : ''}>Pro Rata 불가</option>
+            <option value="PRORATA"${p.method === 'PRORATA' ? ' selected' : ''}>적용</option>
+            <option value="NOPRORATA"${p.method === 'NOPRORATA' ? ' selected' : ''}>미적용</option>
           </select></label>
         ${rateReconfirmWarningHtml(p)}
         <label class="field"><span>NCB 할인율 (%)</span><input type="number" id="pmPre" step="any" min="0" max="100" value="${p.preRate != null ? esc(p.preRate) : ''}"></label>
@@ -6219,11 +6233,11 @@ function premiumPanelHtml(c) {
             </select></label>
           <label class="field pm-rp-custom${rpSel === 'CUSTOM' ? '' : ' hidden'}"><span>Rate Period 직접 입력 (Days)</span>
             <input type="number" id="pmRatePeriod" step="1" min="1" value="${p.ratePeriod != null ? esc(p.ratePeriod) : ''}"></label>
-          <label class="field pm-method${p.ratePeriod && p.days > p.ratePeriod ? '' : ' hidden'}"><span>Pro Rata 여부</span>
+          <label class="field"><span>Pro-rata 적용 여부</span>
             <select id="pmMethod">
               <option value="">선택</option>
-              <option value="PRORATA"${p.method === 'PRORATA' ? ' selected' : ''}>Pro Rata 적용</option>
-              <option value="NOPRORATA"${p.method === 'NOPRORATA' ? ' selected' : ''}>Pro Rata 불가</option>
+              <option value="PRORATA"${p.method === 'PRORATA' ? ' selected' : ''}>적용</option>
+              <option value="NOPRORATA"${p.method === 'NOPRORATA' ? ' selected' : ''}>미적용</option>
             </select></label>
           ${rateReconfirmWarningHtml(p)}
         </div>
@@ -7183,15 +7197,29 @@ function draftPortLines(c) {
   return out;
 }
 const DD_PENDING = '<span class="pending">확인 필요</span>';
+// 기안문 전용 금액 표기 — 다른 화면(KRW 1,234 / USD 1,234.56 표기)은 그대로 두고, 기안문 안에서만
+// 실제 사내 결재 양식과 같은 ₩/$ 기호를 쓴다(fmtMoney를 바꾸면 다른 화면이 전부 같이 바뀌므로 분리).
+function ddMoney(minor, cur) {
+  if (minor == null) return null;
+  const v = minor / minorUnit(cur);
+  return cur === 'KRW' ? `₩${Math.round(v).toLocaleString('ko-KR')}`
+    : `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+function draftAttachFiles(c) {
+  const names = [];
+  if (c.invoiceInfo && c.invoiceInfo.fileName) names.push(c.invoiceInfo.fileName);
+  (c.invoiceDocs || []).forEach(x => { if (x && x.fileName && !names.includes(x.fileName)) names.push(x.fileName); });
+  return names;
+}
 function draftModel(c) {
   const p = premiumInputsFromSaved(c);
   const r = premiumCalc(c, p);
-  const vessel = c.vessel || '확인 필요';
-  const voyage = c.voyage || '확인 필요';
   const title = `${esc(c.vessel || '')}호 ${esc(c.voyage || '')}항차 War &amp; Strikes 추가 보험료 발생의 건`;
+  // 실제 결재 양식(첨부 PDF) 문구를 그대로 쓴다 — 청구 운임 반영 여부는 이 회사의 통상 처리 방식이라 고정
+  // 문구로 넣고, 기안문 자체가 제출 전 직접 검토·수정하는 문서이므로 다른 항목처럼 수정 가능하게만 둔다.
   const reason = `표제 건 관련하여, 영업팀 요청에 따라 ${esc(c.vessel || '')}호 ${esc(c.voyage || '')}항차에 대해 ` +
     `W&amp;S(War &amp; Strikes) 추가 위험 담보가 적용되어 추가 보험료(AP, Additional Premium)가 발생하였습니다. ` +
-    `<span class="pending">[확인 필요: 해당 AP의 청구 운임 반영 여부]</span> 이에 재가를 요청드립니다.`;
+    `해당 AP는 청구 운임에 반영할 예정이며, 이에 재가를 요청드립니다.`;
   const days = p.days != null ? p.days : defaultDays(c);
   const periodLine = (isValidDate(c.entryDate) && isValidDate(c.exitDate))
     ? `${c.entryDate.replace(/-/g, '.')} ~ ${c.exitDate.replace(/-/g, '.')} (총 ${days != null ? days + '일' : '확인 필요'})`
@@ -7200,40 +7228,57 @@ function draftModel(c) {
   const outLine = draftPointLine(c, 'out');
   const portLines = draftPortLines(c);
   const isKB = r.ins === 'KB';
+  // Pro-rata는 담보일수가 Rate Period를 넘을 때만 계산에 실제로 영향을 준다 — 그 경우에만 적용/미적용을 밝히고,
+  // 7일 이내처럼 애초에 영향이 없는 기간에는 괜히 "적용/미적용"을 밝혀 혼란을 주지 않는다(실제로 선택이 계산에 반영된 것만 표시).
+  const prorataNote = (days != null && p.ratePeriod != null && days > p.ratePeriod && p.method)
+    ? ` · Pro-rata ${p.method === 'PRORATA' ? '적용' : '미적용'}` : '';
   const grossRow = {
-    period: (days != null && p.ratePeriod != null) ? `${c.entryDate ? c.entryDate.slice(5).replace('-', '/') : '?'} ~ ${c.exitDate ? c.exitDate.slice(5).replace('-', '/') : '?'} (총 ${days}일)` : DD_PENDING,
-    si: r.si ? fmtMoney(r.si.amt * minorUnit(r.si.cur), r.si.cur) : DD_PENDING,
+    period: (days != null && p.ratePeriod != null) ? `${c.entryDate ? c.entryDate.slice(5).replace('-', '/') : '?'} ~ ${c.exitDate ? c.exitDate.slice(5).replace('-', '/') : '?'} (총 ${days}일)${prorataNote}` : DD_PENDING,
+    si: r.si ? ddMoney(r.si.amt * minorUnit(r.si.cur), r.si.cur) : DD_PENDING,
     rate: p.rate != null ? `${p.rate}%` : DD_PENDING,
-    gross: r.gross != null ? fmtMoney(r.gross, r.cur) : DD_PENDING
+    gross: r.gross != null ? ddMoney(r.gross, r.cur) : DD_PENDING
   };
   const ncbRows = [];
   if (isKB) {
     if (r.pre != null) ncbRows.push({
-      label: `Upfront NCB (선할인)${p.preRate != null ? ` ${p.preRate}%` : ''}`,
+      label: `UP(upfront) NCB ${p.preRate != null ? p.preRate : '?'}%`,
       basis: `Gross Premium × ${p.preRate != null ? p.preRate : '?'}%`,
-      amt: fmtMoney(r.pre, r.cur),
+      basisSub: r.gross != null ? `= ${ddMoney(r.gross, r.cur)} × ${p.preRate}%` : '',
+      amt: ddMoney(r.pre, r.cur),
       due: c.upfrontRefundDone ? '환급 완료' : (c.upfrontRefundNA ? '해당 없음' : monthLabel(c.upfrontRefundExpectedMonth)),
       note: ''
     });
-    if (r.post != null) ncbRows.push({
-      label: `NCB (후할인)${r.postRate != null ? ` ${r.postRate}%` : ''}`,
-      basis: `${r.postBasis === 'GROSS' ? 'Gross Premium' : '선할인 반영 후 보험료'} × ${r.postRate != null ? r.postRate : '?'}%`,
-      amt: fmtMoney(r.post, r.cur),
-      due: r.refundIsActual ? '환급 완료' : monthLabel(c.refundExpectedMonth),
-      note: r.postTableFound ? '' : '추후 협의'
-    });
+    if (r.post != null) {
+      const baseLabel = r.postBasis === 'GROSS' ? 'Gross Premium' : 'Net Premium';
+      const baseAmt = r.postBasis === 'GROSS' ? r.gross : r.afterPre;
+      ncbRows.push({
+        label: `후할인(NCB) ${r.postRate != null ? r.postRate : '?'}%`,
+        basis: `${baseLabel} × ${r.postRate != null ? r.postRate : '?'}%`,
+        basisSub: baseAmt != null ? `= ${ddMoney(baseAmt, r.cur)} × ${r.postRate}%` : '',
+        amt: ddMoney(r.post, r.cur),
+        due: r.refundIsActual ? '환급 완료' : monthLabel(c.refundExpectedMonth),
+        // HRA 진입 회차(r.seq)·구간별 후할인율(r.postRate)은 이미 산출된 실제 값 — 지어내지 않고 그대로 문장으로 풀어 쓴다
+        note: r.postTableFound && r.seq != null ? `본 항차는 HRA In/Out 기준 ${r.seq}항차에 해당하여, 후할인(NCB) ${r.postRate}% 적용함`
+          : r.seq != null ? '추후 협의 (등록된 할인 구간 밖)' : ''
+      });
+    }
   } else if (r.pre != null) {
     ncbRows.push({
-      label: `NCB (최초 할인)${p.preRate != null ? ` ${p.preRate}%` : ''}`,
+      label: `NCB (최초 할인) ${p.preRate != null ? p.preRate : '?'}%`,
       basis: `Gross Premium × ${p.preRate != null ? p.preRate : '?'}%`,
-      amt: fmtMoney(r.pre, r.cur), due: '-', note: '별도 환급 없음'
+      basisSub: r.gross != null ? `= ${ddMoney(r.gross, r.cur)} × ${p.preRate}%` : '',
+      amt: ddMoney(r.pre, r.cur), due: '-', note: '별도 환급 없음'
     });
   }
-  const ncbTotal = r.totalDiscount != null ? fmtMoney(r.totalDiscount, r.cur) : null;
+  const ncbTotal = r.totalDiscount != null ? ddMoney(r.totalDiscount, r.cur) : null;
   const splitApplicable = c.payer === 'CHARTERER';
-  const attach = c.invoice
-    ? `※ 첨부 : ${esc(c.vessel || '')}호 ${esc(c.voyage || '')}항차 WAR AP 인보이스 外 1부 (총 2부) 끝.`
-    : `※ 첨부 : ${DD_PENDING} (인보이스 접수 기록이 없어 첨부 내용을 자동으로 채우지 못했습니다 — 직접 입력하세요)`;
+  const files = draftAttachFiles(c);
+  const shipVoy = `${esc(c.vessel || '')}호 ${esc(c.voyage || '')}항차`;
+  const attach = files.length
+    ? `※ 첨부 : ${shipVoy} ${esc(files[0])}${files.length > 1 ? ` 外 ${files.length - 1}부` : ''} (총 ${files.length}부) "끝".`
+    : c.invoice
+    ? `※ 첨부 : ${shipVoy} WAR AP 인보이스 外 1부 (총 2부) "끝".`
+    : `※ 첨부 : ${DD_PENDING} (첨부 서류를 직접 입력하세요)`;
   return { c, title, reason, periodLine, inLine, outLine, portLines, grossRow, isKB, ncbRows, ncbTotal,
     cur: r.cur, net: r.net, splitApplicable, attach };
 }
@@ -7241,44 +7286,44 @@ function draftSplitHtml(c, d) {
   if (!d.splitApplicable) return '';
   const pct = c.draftCompanyPct;
   const chartererPct = pct != null ? 100 - pct : null;
-  const amt = p => (d.net != null && p != null) ? fmtMoney(Math.round(d.net * p / 100), d.cur) : DD_PENDING;
-  return `<div class="dd-sec draft-no-print-edit">
-    <b>보험료 부담 주체 및 분담 내용</b> (${esc(payerText(c))})
+  const amt = p => (d.net != null && p != null) ? ddMoney(Math.round(d.net * p / 100), d.cur) : DD_PENDING;
+  return `<div class="dd-sec">
+    <span class="dd-sec-title">보험료 부담 주체 및 분담 내용</span> (${esc(payerText(c))})
     <div class="draft-split-row draft-no-print">
       당사 분담 비율 <input type="number" id="draftCompanyPct" min="0" max="100" step="any" value="${pct != null ? esc(pct) : ''}" placeholder="%">%
-      <span class="muted" id="draftChartererPctHint">(Charterer ${chartererPct != null ? chartererPct : '-'}%)</span>
+      <span id="draftChartererPctHint">(Charterer ${chartererPct != null ? chartererPct : '-'}%)</span>
     </div>
-    <div id="draftAmtCharterer">Charterer 부담금 : ${amt(chartererPct)}</div>
-    <div id="draftAmtCompany">당사 부담금 : ${amt(pct)}</div>
-    <div class="muted" id="draftSplitBasis" style="font-size:12px">분담 비율 산출 근거 : ${pct != null ? `Net Premium × ${pct}% (당사) / × ${chartererPct}% (Charterer)` : DD_PENDING}</div>
+    <div class="dd-sub" id="draftAmtCharterer">Charterer 부담금 : ${amt(chartererPct)}</div>
+    <div class="dd-sub" id="draftAmtCompany">당사 부담금 : ${amt(pct)}</div>
   </div>`;
 }
 // 분담 비율(%) 입력칸을 고칠 때 — 기안문 전체를 다시 그리면 제목·본문에 입력 중인 다른 수정이 지워지므로,
-// 분담 금액 쪽 DOM 4곳만 직접 고친다(renderCaseDetail 호출 없음).
+// 분담 금액 쪽 DOM만 직접 고친다(renderCaseDetail 호출 없음).
 function draftSplitUpdateDom(box, c, d) {
   const pct = c.draftCompanyPct;
   const chartererPct = pct != null ? 100 - pct : null;
-  const amt = p => (d.net != null && p != null) ? fmtMoney(Math.round(d.net * p / 100), d.cur) : DD_PENDING;
+  const amt = p => (d.net != null && p != null) ? ddMoney(Math.round(d.net * p / 100), d.cur) : DD_PENDING;
   const put = (id, html) => { const el = box.querySelector('#' + id); if (el) el.innerHTML = html; };
   put('draftChartererPctHint', `(Charterer ${chartererPct != null ? chartererPct : '-'}%)`);
   put('draftAmtCharterer', `Charterer 부담금 : ${amt(chartererPct)}`);
   put('draftAmtCompany', `당사 부담금 : ${amt(pct)}`);
-  put('draftSplitBasis', `분담 비율 산출 근거 : ${pct != null ? `Net Premium × ${pct}% (당사) / × ${chartererPct}% (Charterer)` : DD_PENDING}`);
 }
 function draftModalHtml(c) {
   const d = draftModel(c);
   const table = `<table class="dd-table"><thead><tr><th>요율 적용 기간</th><th>부보가액</th><th>Gross Rate</th><th>Gross Premium</th></tr></thead>
-    <tbody><tr><td class="num">${d.grossRow.period}</td><td class="num">${d.grossRow.si}</td><td class="num">${d.grossRow.rate}</td>
+    <tbody><tr><td class="ctr">${d.grossRow.period}</td><td class="num">${d.grossRow.si}</td><td class="ctr">${d.grossRow.rate}</td>
       <td class="num dd-red">${d.grossRow.gross}</td></tr></tbody></table>`;
+  const basisHtml = r => `<span class="dd-formula">${esc(r.basis)}${r.basisSub ? `<small>${esc(r.basisSub)}</small>` : ''}</span>`;
   const ncbTable = d.ncbRows.length ? `<table class="dd-table"><thead><tr><th>구분</th><th>산출 근거</th><th>금액</th><th>환급 예정 일자</th><th>비고</th></tr></thead>
-    <tbody>${d.ncbRows.map(r => `<tr><td>${esc(r.label)}</td><td>${esc(r.basis)}</td><td class="num">${esc(r.amt)}</td><td>${esc(r.due)}</td><td>${esc(r.note)}</td></tr>`).join('')}
-      <tr><td colspan="2"><b>합계</b></td><td class="num dd-red">${d.ncbTotal != null ? esc(d.ncbTotal) : DD_PENDING}</td><td colspan="2"></td></tr>
+    <tbody>${d.ncbRows.map(r => `<tr><td>${esc(r.label)}</td><td>${basisHtml(r)}</td><td class="num">${esc(r.amt)}</td><td class="ctr">${esc(r.due)}</td><td>${esc(r.note)}</td></tr>`).join('')}
+      <tr><td colspan="2" class="ctr"><b>합 계</b></td><td class="num dd-red">${d.ncbTotal != null ? esc(d.ncbTotal) : DD_PENDING}</td><td colspan="2" class="ctr">-</td></tr>
     </tbody></table>` : `<p class="pending">NCB 산출 내역이 없습니다 — 보험료 산출 화면에서 NCB(선할인) 요율을 입력하면 반영됩니다.</p>`;
   const scheduleLines = [
-    d.inLine ? `<span class="dd-hi">HRA IN: ${esc(d.inLine)}</span>` : `HRA IN: ${DD_PENDING}`,
-    ...d.portLines.map(esc),
-    d.outLine ? `<span class="dd-hi">HRA OUT: ${esc(d.outLine)}</span>` : `HRA OUT: ${DD_PENDING}`
-  ].join('<br>');
+    d.inLine ? `<div class="dd-sub"><span class="dd-hi">HRA IN: ${esc(d.inLine)}</span></div>` : `<div class="dd-sub">HRA IN: ${DD_PENDING}</div>`,
+    ...d.portLines.map(l => `<div class="dd-sub">${esc(l)}</div>`),
+    d.outLine ? `<div class="dd-sub"><span class="dd-hi">HRA OUT: ${esc(d.outLine)}</span></div>` : `<div class="dd-sub">HRA OUT: ${DD_PENDING}</div>`
+  ].join('');
+  const today = (() => { const t = new Date(); return `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}`; })();
   return `<div class="modal-backdrop" id="draftModalBackdrop">
     <div class="draft-modal-panel">
       <div class="modal-head draft-no-print">
@@ -7291,16 +7336,21 @@ function draftModalHtml(c) {
         <button type="button" class="sub small" data-act="draft-print">인쇄</button>
       </div>
       <div class="draft-doc" id="draftDocBody">
-        <div class="dd-title" id="draftTitle" contenteditable="true">${d.title}</div>
-        <div class="dd-sec" contenteditable="true">${d.reason}</div>
-        <div class="dd-sec" contenteditable="true"><span class="dd-no">1.</span> 추가 전쟁위험 담보 적용 기간 : ${d.periodLine}<br>${scheduleLines}</div>
-        <div class="dd-sec"><span class="dd-no">2.</span> 추가 전쟁위험 총 보험료${table}</div>
+        <table class="dd-infobox"><tbody>
+          <tr><th>기안일자</th><td contenteditable="true">${esc(today)}</td><th>기안부서</th><td contenteditable="true">기획/ESG팀</td></tr>
+          <tr><th>기안자</th><td contenteditable="true">${esc((currentUser && currentUser.name) || '')}</td><th>문서번호</th><td contenteditable="true" data-placeholder="사내 결재 시스템에서 채번"></td></tr>
+          <tr><th>문서제목</th><td id="draftTitle" contenteditable="true" colspan="3">${d.title}</td></tr>
+        </tbody></table>
+        <div class="dd-reason" contenteditable="true">${d.reason}</div>
+        <div class="dd-sec" contenteditable="true"><span class="dd-no">1.</span> <span class="dd-sec-title">추가 전쟁위험 담보 적용 기간</span> : ${d.periodLine}</div>
+        ${scheduleLines}
+        <div class="dd-sec"><span class="dd-no">2.</span> <span class="dd-sec-title">추가 전쟁위험 총 보험료</span>${table}</div>
         ${draftSplitHtml(c, d)}
-        <div class="dd-sec"><span class="dd-no">3.</span> NCB 예상 금액${ncbTable}</div>
+        <div class="dd-sec"><span class="dd-no">3.</span> <span class="dd-sec-title">NCB 예상 금액</span>${ncbTable}</div>
         <div class="dd-attach" contenteditable="true">${d.attach}</div>
       </div>
       <div class="msg draft-no-print" id="draftMsg"></div>
-      <p class="muted draft-no-print" style="margin-top:10px">회색으로 표시된 "확인 필요" 부분은 시스템에 저장된 정보가 없어 자동으로 채우지 못한 부분입니다 — 위 문서 안에서 직접 눌러 고치면 됩니다. 이 수정 내용은 저장되지 않으니(분담 비율만 저장됩니다), 인쇄·복사 전에 확인해 주세요.</p>
+      <p class="muted draft-no-print" style="margin-top:10px">회색 "확인 필요" 표시는 시스템에 저장된 정보가 없어 자동으로 채우지 못한 부분입니다 — 문서 안에서 직접 눌러 고치면 됩니다. 문서번호·참조자처럼 이 시스템이 모르는 항목은 빈 칸으로 두었으니 직접 입력해 주세요. 수정 내용은 저장되지 않으니(분담 비율만 저장됩니다) 인쇄·복사 전에 확인해 주세요.</p>
     </div>
   </div>`;
 }
