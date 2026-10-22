@@ -1056,6 +1056,9 @@
       </div>
     </header>
     <div class="warn-line hidden" id="storageWarn">이 브라우저에는 자동 저장이 되지 않습니다. 닫기 전에 「작업 파일 저장」을 누르세요.</div>
+    <!-- 공용저장 진단 배너 — 상단 작은 글자는 놓치기 쉬워서, 화면에서 바로 눈에 띄도록 따로 둔다.
+         연결·전송·수신 상태를 한눈에 보여주고, 실패하면 구체적인 이유까지 보여준다. -->
+    <div class="warn-line hidden" id="cloudDiagBanner" style="font-size:13px;line-height:1.7"></div>
 
     <main class="content">
 
@@ -8977,12 +8980,30 @@ function persist() {
 // Case 수가 많지 않은 내부 업무 도구라 단순하게 두는 쪽을 택한 것 — Firestore 쓰기는 덮어쓰기(upsert)라
 // 내용이 같으면 그냥 같은 값을 다시 쓸 뿐 문제되지 않는다.
 let cloudSyncTimer = null;
+// 작은 글자(헤더 옆)는 눈에 잘 안 띈다는 피드백이 있어서, 화면에 큰 배너로도 똑같은 내용을 보여준다.
+// 이 배너 하나는 window.cloudDiag에 모아 두고 main·cloud-backend 모듈 스크립트 둘 다에서 갱신한다.
+window.cloudDiag = { push: '', pull: '' };
+function renderCloudDiagBanner() {
+  const el = $('cloudDiagBanner');
+  if (!el) return;
+  const cloud = window.warApCloud;
+  if (!cloud || !currentUser) { el.classList.add('hidden'); return; }
+  const STATUS_TEXT = { idle: '연결 안 됨(아직 「공용저장 연결」을 안 누름)', connecting: '연결 시도 중…',
+    connected: '연결됨', unregistered: '회사 Google 계정이 아님', error: '오류' };
+  const lines = [`공용저장 상태: ${STATUS_TEXT[cloud.status] || cloud.status}${cloud.error ? ' — ' + cloud.error : ''}`];
+  if (window.cloudDiag.push) lines.push(window.cloudDiag.push);
+  if (window.cloudDiag.pull) lines.push(window.cloudDiag.pull);
+  el.innerHTML = lines.map(esc).join('<br>');
+  el.classList.remove('hidden');
+}
+window.renderCloudDiagBanner = renderCloudDiagBanner;
 // Console(F12) 없이도 바로 보이도록, 화면의 cloudSyncPush 글자를 직접 고친다.
 function setCloudPushMsg(text) {
   const el = $('cloudSyncPush');
-  if (!el) return;
-  el.textContent = text;
-  el.classList.toggle('hidden', !text);
+  const full = text ? `보낸 결과: ${text}` : '';
+  if (el) { el.textContent = full; el.classList.toggle('hidden', !full); }
+  window.cloudDiag.push = full;
+  renderCloudDiagBanner();
 }
 function scheduleCloudSync() {
   if (!window.warApCloud || window.warApCloud.status !== 'connected') {
@@ -9007,8 +9028,8 @@ function scheduleCloudSync() {
         }
         if (done === total) {
           setCloudPushMsg(fails.length
-            ? `보낸 결과: ${total}건 중 성공 ${okCount}·실패 ${fails.length} — ${fails[0]}`
-            : `보낸 결과: ${total}건 모두 성공`);
+            ? `${total}건 중 성공 ${okCount}·실패 ${fails.length} — ${fails[0]}`
+            : `${total}건 모두 성공`);
         }
       });
     }
@@ -9129,6 +9150,7 @@ window.addEventListener('warap-cloud-status', e => {
   updateCloudSyncButton();
   const { status, error } = e.detail || {};
   if (status === 'connected') scheduleCloudSync();   // 막 연결됐으면, 이 PC에 이미 있던 Case도 바로 올려 보낸다
+  renderCloudDiagBanner();
   if (!el) return;
   const LABEL = { connecting: '공용저장: 연결 중…', connected: '공용저장: 연결됨(베타)',
     unregistered: '공용저장: 회사 계정 아님', error: '공용저장: 오류' };
@@ -10245,14 +10267,20 @@ async function activateForUser(user) {
   unsubscribeCases = onSnapshot(collection(fbStore, 'cases'), snap => {
     console.log(`[공용저장] 서버에서 Case ${snap.size}건 받음`);
     // Console(F12) 없이도 바로 보이도록 — 이 모듈 스크립트도 같은 문서(DOM)를 쓰므로 직접 고칠 수 있다.
+    const msg = `받은 결과: 서버 Case ${snap.size}건`;
     const el = document.getElementById('cloudSyncPull');
-    if (el) { el.textContent = `받은 결과: 서버 Case ${snap.size}건`; el.classList.remove('hidden'); }
+    if (el) { el.textContent = msg; el.classList.remove('hidden'); }
+    if (window.cloudDiag) window.cloudDiag.pull = msg;
+    if (window.renderCloudDiagBanner) window.renderCloudDiagBanner();
     if (casesCb) casesCb(snap.docs.map(d => ({ id: d.id, ...d.data() })));
   }, err => {
     console.error('[공용저장] 구독 오류', err);
     warApCloud.status = 'error'; warApCloud.error = '공용저장 연결이 끊겼습니다: ' + err.message; notifyStatus();
+    const msg = `받기 실패: ${err.message}`;
     const el = document.getElementById('cloudSyncPull');
-    if (el) { el.textContent = `받기 실패: ${err.message}`; el.classList.remove('hidden'); }
+    if (el) { el.textContent = msg; el.classList.remove('hidden'); }
+    if (window.cloudDiag) window.cloudDiag.pull = msg;
+    if (window.renderCloudDiagBanner) window.renderCloudDiagBanner();
   });
 }
 
