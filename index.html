@@ -1042,6 +1042,10 @@
         <span class="hidden" id="gwLoginArea" style="margin-right:8px"></span>
         <button type="button" class="sub small hidden" id="cloudSyncBtn" style="margin-right:6px">공용저장 연결 (Google 계정 확인)</button>
         <span class="muted" id="cloudSyncStatus" style="margin-right:8px;font-size:11px" title="영업팀·기획/ESG팀 간 Case 공용저장(베타) 연결 상태"></span>
+        <!-- Console(F12)을 안 열어도 바로 눈으로 보이는 진단 — "보낸 결과"(이 PC→서버)와 "받은 결과"(서버→이 PC)를
+             따로 보여준다. 둘 다 비어 있으면 아직 한 번도 시도하지 않은 것. -->
+        <span class="muted hidden" id="cloudSyncPush" style="margin-right:8px;font-size:11px"></span>
+        <span class="muted hidden" id="cloudSyncPull" style="font-size:11px"></span>
         <!-- 업무 알림 자동 메일(베타) 발송 이력 — 기획/ESG팀 전용. CLAUDE.md "예외: 업무 알림 자동
              메일 발송" 참고. 단추는 항상 있고(서버가 꺼져 있어도 눌러서 상태를 바로 알 수 있게),
              목록은 열 때마다 새로 받아온다. -->
@@ -8973,18 +8977,39 @@ function persist() {
 // Case 수가 많지 않은 내부 업무 도구라 단순하게 두는 쪽을 택한 것 — Firestore 쓰기는 덮어쓰기(upsert)라
 // 내용이 같으면 그냥 같은 값을 다시 쓸 뿐 문제되지 않는다.
 let cloudSyncTimer = null;
+// Console(F12) 없이도 바로 보이도록, 화면의 cloudSyncPush 글자를 직접 고친다.
+function setCloudPushMsg(text) {
+  const el = $('cloudSyncPush');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle('hidden', !text);
+}
 function scheduleCloudSync() {
   if (!window.warApCloud || window.warApCloud.status !== 'connected') {
     console.log('[공용저장] 올리기 건너뜀 — 연결 상태 아님 (status=' + (window.warApCloud ? window.warApCloud.status : '(없음)') + ')');
     return;
   }
   clearTimeout(cloudSyncTimer);
+  setCloudPushMsg(`보내는 중… (Case ${state.cases.length}건)`);
   cloudSyncTimer = setTimeout(() => {
     console.log(`[공용저장] Case ${state.cases.length}건 올리기 시작`);
+    const total = state.cases.length;
+    let done = 0, okCount = 0;
+    const fails = [];
+    if (total === 0) { setCloudPushMsg('보낼 Case 없음'); return; }
     for (const c of state.cases) {
       window.warApCloud.createCase(c).then(ok => {
-        if (ok) { c._cloud = true; console.log(`[공용저장] "${c.vessel}/${c.voyage}" 올림 성공`); }
-        else console.warn(`[공용저장] "${c.vessel}/${c.voyage}" 올리기 실패 — status=${window.warApCloud.status}, error=${window.warApCloud.error}`);
+        done++;
+        if (ok) { c._cloud = true; okCount++; console.log(`[공용저장] "${c.vessel}/${c.voyage}" 올림 성공`); }
+        else {
+          fails.push(`${c.vessel}/${c.voyage}: ${window.warApCloud.error}`);
+          console.warn(`[공용저장] "${c.vessel}/${c.voyage}" 올리기 실패 — status=${window.warApCloud.status}, error=${window.warApCloud.error}`);
+        }
+        if (done === total) {
+          setCloudPushMsg(fails.length
+            ? `보낸 결과: ${total}건 중 성공 ${okCount}·실패 ${fails.length} — ${fails[0]}`
+            : `보낸 결과: ${total}건 모두 성공`);
+        }
       });
     }
   }, 1200);
@@ -10219,10 +10244,15 @@ async function activateForUser(user) {
   if (unsubscribeCases) unsubscribeCases();
   unsubscribeCases = onSnapshot(collection(fbStore, 'cases'), snap => {
     console.log(`[공용저장] 서버에서 Case ${snap.size}건 받음`);
+    // Console(F12) 없이도 바로 보이도록 — 이 모듈 스크립트도 같은 문서(DOM)를 쓰므로 직접 고칠 수 있다.
+    const el = document.getElementById('cloudSyncPull');
+    if (el) { el.textContent = `받은 결과: 서버 Case ${snap.size}건`; el.classList.remove('hidden'); }
     if (casesCb) casesCb(snap.docs.map(d => ({ id: d.id, ...d.data() })));
   }, err => {
     console.error('[공용저장] 구독 오류', err);
     warApCloud.status = 'error'; warApCloud.error = '공용저장 연결이 끊겼습니다: ' + err.message; notifyStatus();
+    const el = document.getElementById('cloudSyncPull');
+    if (el) { el.textContent = `받기 실패: ${err.message}`; el.classList.remove('hidden'); }
   });
 }
 
