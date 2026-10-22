@@ -8966,6 +8966,21 @@ function showStorageWarn() { $('storageWarn').classList.remove('hidden'); }
 function persist() {
   const data = { app: 'war-ap', version: 1, savedAt: nowStr(), cases: state.cases, history: state.history, vesselTz: state.vesselTz, postTables: state.postTables, contacts: state.contacts, notifications: state.notifications };
   if (!storageSet(STORAGE_KEY, JSON.stringify(data))) showStorageWarn();
+  scheduleCloudSync();
+}
+// 공용저장(연결돼 있을 때만) — persist()가 워낙 자주 불려서(입력 한 칸마다) 매번 올리면 낭비이므로,
+// 짧게 묶어서(디바운스) 한 번에 모든 Case를 다시 올린다. 바뀐 Case만 골라내지 않고 전부 올리는 건
+// Case 수가 많지 않은 내부 업무 도구라 단순하게 두는 쪽을 택한 것 — Firestore 쓰기는 덮어쓰기(upsert)라
+// 내용이 같으면 그냥 같은 값을 다시 쓸 뿐 문제되지 않는다.
+let cloudSyncTimer = null;
+function scheduleCloudSync() {
+  if (!window.warApCloud || window.warApCloud.status !== 'connected') return;
+  clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = setTimeout(() => {
+    for (const c of state.cases) {
+      window.warApCloud.createCase(c).then(ok => { if (ok) c._cloud = true; });
+    }
+  }, 1200);
 }
 
 function loadStored() {
@@ -9075,8 +9090,9 @@ function mergeCloudCases(remoteList) {
 window.addEventListener('warap-cloud-status', e => {
   const el = $('cloudSyncStatus');
   updateCloudSyncButton();
-  if (!el) return;
   const { status, error } = e.detail || {};
+  if (status === 'connected') scheduleCloudSync();   // 막 연결됐으면, 이 PC에 이미 있던 Case도 바로 올려 보낸다
+  if (!el) return;
   const LABEL = { connecting: '공용저장: 연결 중…', connected: '공용저장: 연결됨(베타)',
     unregistered: '공용저장: 회사 계정 아님', error: '공용저장: 오류' };
   el.textContent = LABEL[status] || '';
@@ -10137,7 +10153,7 @@ function exportLedgerCsv() {
        올라가지 못하게 막아서, 영업팀/기획팀을 따로 구분하지 않아도 새어나갈 정보가 없다. -->
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js';
 import {
   getFirestore, collection, doc, setDoc, onSnapshot
 } from 'https://www.gstatic.com/firebasejs/13.0.0/firebase-firestore.js';
@@ -10154,15 +10170,8 @@ const CLOUD = {
     messagingSenderId: '404087188958',
     appId: '1:404087188958:web:900cc1364d8ebb461f014f'
   },
-  // 기획/ESG팀 전용(보험료 등) — D:\vibe\cloud-backend\firestore.rules의 confidentialKeys와
-  // 반드시 같은 목록으로 유지한다. 신규 등록 시 이 필드들은 공용저장으로 보내지 않는다(아직
-  // 보내도 거부되며, 보험료 등은 기획/ESG팀 PC에서 처리하는 기존 방식을 그대로 따른다).
-  confidentialKeys: ['insurer', 'insuredValue', 'premium', 'gross', 'preRate', 'net',
-    'quoteDraft', 'warranty', 'warrantyManualLock', 'coverConfirm',
-    'quoteMail', 'coverMail', 'finalMail', 'invoice', 'invoiceInfo', 'invoiceDocs',
-    'paid', 'refundState', 'refundExpected', 'refunds', 'refundDone',
-    'refundExpectedMonth', 'refundActualMonth', 'refundActualDate', 'refundActualAmount',
-    'refundActualCurrency', 'policyNo', 'endorsementDate', 'draftCompanyPct']
+  // 2026-10-22 담당자 요청으로 필드 제한을 없앴다 — 보험료·Warranty·인보이스 등도 전부 공용저장으로
+  // 올라가고, 영업팀·기획팀 구분 없이 모두 볼 수 있다(D:\vibe\cloud-backend\firestore.rules도 같이 풂).
 };
 
 const fbApp = initializeApp(CLOUD.firebaseConfig);
@@ -10178,6 +10187,25 @@ function notifyStatus() {
 
 const COMPANY_DOMAIN = '@heung-a.co.kr';
 
+// 회사 계정 확인 + 실제 연결(onSnapshot 구독) — signInWithPopup으로 막 로그인했을 때와, 이 브라우저에
+// 이미 로그인돼 있던 걸 조용히 이어받을 때(auto-reconnect, 아래 onAuthStateChanged) 둘 다 이 함수 하나로
+// 처리한다. 상태 판정 기준이 한 곳에만 있어야 두 경로가 서로 다른 결과를 내는 일이 없다.
+async function activateForUser(user) {
+  const email = (user.email || '').toLowerCase();
+  if (!user.emailVerified || !email.endsWith(COMPANY_DOMAIN)) {
+    await signOut(fbAuth);
+    warApCloud.status = 'unregistered';
+    warApCloud.error = `${email} 은 회사(${COMPANY_DOMAIN}) 계정이 아닙니다. 회사 Google 계정으로 다시 시도하세요.`;
+    notifyStatus();
+    return;
+  }
+  warApCloud.status = 'connected'; warApCloud.error = ''; notifyStatus();
+  if (unsubscribeCases) unsubscribeCases();
+  unsubscribeCases = onSnapshot(collection(fbStore, 'cases'), snap => {
+    if (casesCb) casesCb(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+  }, err => { warApCloud.status = 'error'; warApCloud.error = '공용저장 연결이 끊겼습니다: ' + err.message; notifyStatus(); });
+}
+
 const warApCloud = {
   status: 'idle', error: '',   // idle | connecting | connected | unregistered | error
   // 직원별 수동 등록은 없다 — 회사 Google Workspace 계정(heung-a.co.kr)으로 로그인했는지만
@@ -10186,20 +10214,9 @@ const warApCloud = {
   async connect() {
     this.status = 'connecting'; this.error = ''; notifyStatus();
     try {
-      const cred = await signInWithPopup(fbAuth, googleProvider);
-      const email = (cred.user.email || '').toLowerCase();
-      if (!cred.user.emailVerified || !email.endsWith(COMPANY_DOMAIN)) {
-        await signOut(fbAuth);
-        this.status = 'unregistered';
-        this.error = `${email} 은 회사(${COMPANY_DOMAIN}) 계정이 아닙니다. 회사 Google 계정으로 다시 시도하세요.`;
-        notifyStatus();
-        return false;
-      }
-      this.status = 'connected'; notifyStatus();
-      if (unsubscribeCases) unsubscribeCases();
-      unsubscribeCases = onSnapshot(collection(fbStore, 'cases'), snap => {
-        if (casesCb) casesCb(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-      }, err => { this.status = 'error'; this.error = '공용저장 연결이 끊겼습니다: ' + err.message; notifyStatus(); });
+      await signInWithPopup(fbAuth, googleProvider);
+      // 로그인 성공 뒤 실제 연결 처리(회사 계정 확인·구독 시작)는 아래 onAuthStateChanged가
+      // activateForUser로 한다 — 이 브라우저에서 이미 로그인돼 있던 경우도 같은 경로를 타게 하기 위함.
       return true;
     } catch (err) {
       this.status = 'error'; this.error = (err && err.message) || String(err); notifyStatus();
@@ -10211,7 +10228,7 @@ const warApCloud = {
     if (this.status !== 'connected') return false;
     const payload = {};
     for (const k of Object.keys(caseObj)) {
-      if (k === 'id' || CLOUD.confidentialKeys.includes(k)) continue;
+      if (k === 'id' || k.startsWith('_')) continue;   // id는 문서 경로로 따로 쓰고, _cloud 같은 클라이언트 전용 표시는 보내지 않는다
       payload[k] = caseObj[k] === undefined ? null : caseObj[k];
     }
     try { await setDoc(doc(fbStore, 'cases', caseObj.id), payload); return true; }
@@ -10225,6 +10242,15 @@ const warApCloud = {
 };
 window.warApCloud = warApCloud;
 window.dispatchEvent(new Event('warap-cloud-ready'));
+
+// 이 브라우저에서 예전에 한 번이라도 「공용저장 연결」로 로그인한 적이 있으면, Firebase가 그 로그인
+// 상태를 기억해 뒀다가(이 브라우저에만, 비밀번호 없이) 다음에 열 때 팝업 없이 조용히 넘겨준다 — 그래서
+// 최초 1번만 버튼을 눌러 로그인하면, 그다음부터는 이 브라우저에서 자동으로 재연결된다. 로그인 기록이
+// 없는 새 브라우저·컴퓨터는 여전히 처음 한 번은 직접 눌러야 한다(팝업은 사람이 누른 동작에서만 뜸).
+onAuthStateChanged(fbAuth, user => {
+  if (user) activateForUser(user);
+  else if (warApCloud.status !== 'idle') { warApCloud.status = 'idle'; warApCloud.error = ''; notifyStatus(); }
+});
 </script>
 </body>
 </html>
