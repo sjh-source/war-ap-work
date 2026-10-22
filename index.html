@@ -949,6 +949,35 @@
   .noti-detail { margin-top: 2px; }
   .noti-meta { margin-top: 4px; font-size: 10px; }
   .noti-actions { margin-top: 6px; gap: 6px; }
+  /* 기안문(보험료 지급 내부 결재 문서) 미리보기 — 카드형 UI가 아니라 실제 문서처럼 흰 배경·검은 글자로 */
+  .draft-modal-panel { background: #fff; width: min(920px, 100%); max-height: 90vh; overflow-y: auto;
+    padding: 22px 26px; border-radius: var(--r); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25); }
+  .draft-doc { background: #fff; color: #000; padding: 28px 34px; border: 1px solid var(--line-strong);
+    line-height: 1.9; font-size: 14px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .draft-doc .dd-title { font-size: 17px; font-weight: 700; text-align: center; margin-bottom: 18px; outline: none; }
+  .draft-doc .dd-title:focus, .draft-doc .dd-body:focus { background: var(--navy-50); }
+  .draft-doc .dd-no { font-weight: 700; }
+  .draft-doc .dd-sec { margin-top: 16px; outline: none; white-space: pre-wrap; }
+  .draft-doc .dd-hi { background: #fff6a3; padding: 1px 2px; }
+  .draft-doc table.dd-table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  .draft-doc table.dd-table th, .draft-doc table.dd-table td { border: 1px solid #000; padding: 6px 8px; font-size: 13px; }
+  .draft-doc table.dd-table th { background: #eee; font-weight: 700; text-align: center; }
+  .draft-doc table.dd-table td.num { text-align: right; }
+  .draft-doc .dd-red { color: #c00; font-weight: 700; }
+  .draft-doc .dd-attach { margin-top: 18px; font-size: 13px; }
+  .draft-split-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; font-size: 13px; }
+  .draft-split-row input { width: 64px; }
+  @media print {
+    /* #draftModalBackdrop는 body 바로 아래가 아니라 화면 깊숙이 있는 요소라 display:none으로 조상을 지우면
+       그 안의 모달도 같이 사라진다 — 그래서 display 대신 visibility를 쓰고, 모달에서만 다시 보이게 한다.
+       .modal-backdrop(기존 공통 클래스)가 이미 position:fixed; inset:0 이라 조상의 visibility:hidden과
+       무관하게 화면(인쇄 페이지) 전체를 그대로 덮는다. */
+    body * { visibility: hidden !important; }
+    #draftModalBackdrop, #draftModalBackdrop * { visibility: visible !important; }
+    #draftModalBackdrop { background: #fff !important; padding: 0 !important; }
+    .draft-modal-panel { box-shadow: none; max-height: none; overflow: visible; width: 100%; }
+    .draft-no-print { display: none !important; }
+  }
 </style>
 <!-- 브라우저 Gmail 직접 연동용 — CLAUDE.md "추가 허용: 브라우저에서 직접 Gmail API 호출" 예외 범위.
      client_secret은 이 파일 어디에도 없다(토큰 플로우라 필요 없음). -->
@@ -2832,6 +2861,7 @@ let contactEditOpen = false;    // 보험사 수신처(Gmail 자동입력용) �
 let contactFormOpen = false;    // 모달 안의 추가·수정 입력 폼
 let contactFormId = null;       // 수정 중인 담당자 id (null이면 새로 추가)
 let mailModalIdx = null;     // scheduleChangeMail처럼 여러 건 쌓이는 메일일 때 그중 몇 번째인지 (숫자 인덱스, 단일 메일은 null)
+let draftOpenFor = null;     // 「기안 작성」 미리보기 모달이 열려 있는 Case id (null이면 닫힘)
 // 지금 모달이 가리키는 메일 객체 하나를 돌려준다 (scheduleChangeMail은 배열에서 꺼낸다)
 function curMailOf(c, key, idx) {
   if (!c || !key) return null;
@@ -3226,7 +3256,8 @@ function renderCaseDetail() {
         </div>
         <div class="msg" id="mailMsg"></div>
       </div>
-    </div>` : ''}`;
+    </div>` : ''}
+    ${draftOpenFor === c.id ? draftModalHtml(c) : ''}`;
 }
 
 function setMailMsg(text, kind) {
@@ -3985,6 +4016,46 @@ function bindCaseDetail(box) {
   box.addEventListener('click', e => {
     if (e.target.id === 'mailModalBackdrop') { mailModalOpen = false; mailModalKey = null; mailModalIdx = null; renderCaseDetail(); }
     if (e.target.id === 'schedHistBackdrop') { scheduleHistOpen = false; renderCaseDetail(); }
+  });
+  // 기안 작성 모달 — 열기/닫기/복사/인쇄
+  box.addEventListener('click', async e => {
+    const b = e.target.closest('[data-act]');
+    if (!b) return;
+    const act = b.dataset.act;
+    if (!/^draft-/.test(act)) return;
+    const c = caseId ? findCase(caseId) : null;
+    if (!c) return;
+    if (act === 'draft-open') { draftOpenFor = c.id; renderCaseDetail(); return; }
+    if (act === 'draft-close') { draftOpenFor = null; renderCaseDetail(); return; }
+    if (act === 'draft-copy-title') {
+      const el = box.querySelector('#draftTitle');
+      const ok = el ? await copyText(el.innerText) : false;
+      setDraftMsg(ok ? '제목을 복사했습니다.' : '복사에 실패했습니다. 직접 선택해 복사해 주세요.', ok ? 'ok' : 'err');
+      return;
+    }
+    if (act === 'draft-copy-all') {
+      const el = box.querySelector('#draftDocBody');
+      const ok = el ? await copyRich(el.innerHTML, el.innerText) : false;
+      setDraftMsg(ok ? '기안문 전체를 복사했습니다 (표 형식 유지).' : '복사에 실패했습니다. 직접 선택해 복사해 주세요.', ok ? 'ok' : 'err');
+      return;
+    }
+    if (act === 'draft-print') { printDraftDoc(); return; }
+  });
+  // 기안 작성 모달 바깥(배경)을 누르면 닫기
+  box.addEventListener('click', e => {
+    if (e.target.id === 'draftModalBackdrop') { draftOpenFor = null; renderCaseDetail(); }
+  });
+  // 분담 비율(%) — 입력하는 대로 Case에 저장. 전체를 다시 그리지 않고 금액 쪽만 고쳐서, 기안문 제목·본문에
+  // 입력 중인 다른 수정이 지워지지 않게 한다.
+  box.addEventListener('input', e => {
+    if (e.target.id !== 'draftCompanyPct') return;
+    const c = caseId ? findCase(caseId) : null;
+    if (!c) return;
+    const raw = e.target.value;
+    const v = raw === '' ? null : Number(raw);
+    c.draftCompanyPct = Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : null;
+    persist();
+    draftSplitUpdateDom(box, c, draftModel(c));
   });
 }
 
@@ -6005,6 +6076,14 @@ function ratePeriodSelValue(ratePeriod) { return ratePeriod === 7 || ratePeriod 
 // 탭 상태 — Case를 바꿔도 보던 탭을 유지한다
 let premTab = 'PREMIUM';   // 'PREMIUM' | 'NCB'
 
+// 「기안 작성」 버튼 — Gross Premium이 산출되어 있어야 보인다(인보이스 접수·최종 보험료 등록 단계를 기다리지 않음,
+// 그 단계는 실제로 입력 기능이 없어 항상 비어 있기 때문).
+function draftBtnHtml(c) {
+  const p = premiumInputsFromSaved(c);
+  const r = premiumCalc(c, p);
+  return r.gross != null ? '<button type="button" class="small" data-act="draft-open">기안 작성</button>' : '';
+}
+
 // 메리츠화재 등(후할인·환급 없이 최초 NCB 할인 1회만 적용하는 보험사) 전용 — Gross/NCB/Net 3탭 대신
 // 보험조건(Gross Rate·Rate Period·Pro Rata·NCB 할인율)을 한 화면에 입력해 Net Rate·Net Premium을 바로 보여준다.
 // 저장 input id(pmRate/pmDays/pmRatePeriodSel 등)는 KB 화면과 동일하게 맞춰 readPremiumInputs/savePremium을 그대로 쓴다.
@@ -6054,7 +6133,7 @@ function meritzPremiumPanelHtml(c, si, p, r) {
   const parts = meritzResultParts(p, r, si);
   return `
     <section class="prem-panel">
-      <div class="mail-top"><h2>보험료 산출 내역</h2></div>
+      <div class="mail-top"><h2>보험료 산출 내역</h2>${draftBtnHtml(c)}</div>
       <table class="kv"><tbody>
         <tr><th>보험사</th><td>${esc(INSURERS[ins])}</td></tr>
         <tr><th>Insured Value</th><td>${si ? fmtMoney(si.amt * minorUnit(si.cur), si.cur) : '<span class="pending">등록되지 않음</span>'}</td></tr>
@@ -6119,7 +6198,7 @@ function premiumPanelHtml(c) {
 
   return `
     <section class="prem-panel">
-      <div class="mail-top"><h2>보험료 산출 내역</h2></div>
+      <div class="mail-top"><h2>보험료 산출 내역</h2>${draftBtnHtml(c)}</div>
       <div class="pm-tabs">${tab('PREMIUM', 'Gross Premium')}${tab('NCB', isKB ? 'NCB (선할인·후할인)' : 'NCB (최초 할인)')}${tab('FINAL', 'Net Premium')}</div>
 
       <div class="pm-tabpanel${premTab === 'PREMIUM' ? '' : ' hidden'}" id="pmTabPremium">
@@ -6214,7 +6293,6 @@ const GW_INSURER_DOMAINS = { KB: 'kbinsure.co.kr', MERITZ: 'meritz.co.kr' };
 let gwAccessToken = null;
 let gwTokenExpiresAt = 0;
 let gwTokenClient = null;
-let gwSeenIds = new Set(JSON.parse(storageGet('war-ap.gmailWeb.seen') || '[]'));
 
 function gwBase64UrlDecode(s) {
   if (!s) return '';
@@ -6324,13 +6402,16 @@ function gwTestSenderMatchesInsurer(from, insurer) {
   if (!insurer || !GW_INSURER_DOMAINS[insurer]) return true;
   return !!(from && from.toLowerCase().includes(GW_INSURER_DOMAINS[insurer]));
 }
-function gwMatchCase(subject, from, caseList) {
-  const upper = String(subject || '').toUpperCase();
-  let hits = caseList.filter(c => c.vessel && upper.includes(c.vessel.toUpperCase()) && c.voyage && upper.includes(c.voyage.toUpperCase()));
+// 선박명·항차는 메일 제목에만 있지 않을 수 있다(보험사 회신 제목이 "RE: Quotation"처럼 일반적인 경우) —
+// 제목과 본문을 합쳐서 찾는다. 후보가 여러 Case에 걸리면(같은 선박명이 다른 항차로 여러 번 등장 등)
+// 전처럼 안전하게 "매칭 안 됨"으로 남긴다(임의로 하나를 고르지 않음).
+function gwMatchCase(subject, bodyText, from, caseList) {
+  const hay = (String(subject || '') + '\n' + String(bodyText || '')).toUpperCase();
+  let hits = caseList.filter(c => c.vessel && hay.includes(c.vessel.toUpperCase()) && c.voyage && hay.includes(c.voyage.toUpperCase()));
   const hitsInsurerOk = hits.filter(c => gwTestSenderMatchesInsurer(from, c.insurer));
   if (hitsInsurerOk.length >= 1) hits = hitsInsurerOk;
   if (hits.length === 1) return { caseId: hits[0].id, vesselMatch: true, voyageMatch: true };
-  let vOnly = caseList.filter(c => c.vessel && upper.includes(c.vessel.toUpperCase()));
+  let vOnly = caseList.filter(c => c.vessel && hay.includes(c.vessel.toUpperCase()));
   const vOnlyInsurerOk = vOnly.filter(c => gwTestSenderMatchesInsurer(from, c.insurer));
   if (vOnlyInsurerOk.length >= 1) vOnly = vOnlyInsurerOk;
   if (vOnly.length === 1) return { caseId: vOnly[0].id, vesselMatch: true, voyageMatch: false };
@@ -6505,8 +6586,8 @@ async function gwProcessMessage(msgId, caseList) {
   const h = name => (headers.find(x => x.name === name) || {}).value || '';
   const subject = h('Subject'), from = h('From'), dateH = h('Date');
   const text = gwGetMailBody(full.payload);
-  if (!gwTestLooksLikeQuoteMail(subject, text)) return { skipped: 'NOT_QUOTE_MAIL' };
-  const mt = gwMatchCase(subject, from, caseList);
+  if (!gwTestLooksLikeQuoteMail(subject, text)) return { skipped: 'NOT_QUOTE_MAIL', subject };
+  const mt = gwMatchCase(subject, text, from, caseList);
   const matchedCase = mt.caseId ? caseList.find(c => c.id === mt.caseId) : null;
   const insurerHint = matchedCase ? matchedCase.insurer : '';
   let terms = gwParseTerms(text);
@@ -6530,7 +6611,7 @@ async function gwProcessMessage(msgId, caseList) {
     } catch (e) { attachErrors.push(`첨부("${part.filename}") 분석 실패: ` + e.message); }
   }
   const resolved = gwResolveWarranty(warrantyCandidates, attachErrors);
-  return { msgId, caseId: mt.caseId, vesselMatch: mt.vesselMatch, voyageMatch: mt.voyageMatch, terms,
+  return { msgId, subject, caseId: mt.caseId, vesselMatch: mt.vesselMatch, voyageMatch: mt.voyageMatch, terms,
     warrantyText: resolved.text, rawText, attachmentNote: resolved.note, receivedAt: dateH, from };
 }
 
@@ -6677,11 +6758,14 @@ async function refreshGmailSync(force) {
       console.warn('[Gmail 연동]', err);
       return;
     }
-    const messages = (listResp.messages || []).filter(m => !gwSeenIds.has(m.id));
+    // "이미 확인한 메일" 영구 차단은 두지 않는다 — 검색 쿼리(90일·제목 키워드)로 대상이 이미 좁혀져 있고,
+    // 같은 내용을 다시 반영하려는 것은 applyGmailUpdate의 내용 비교(termsAlreadyApplied/warrantyAlreadyApplied)가
+    // 막아 준다. 그래야 추출 로직을 고친 뒤에도 이전에 "본" 메일을 다시 분석할 수 있다(요청사항).
+    const messages = listResp.messages || [];
+    console.log(`[Gmail 연동] 검색된 메일 ${messages.length}건 (쿼리: ${q})`);
 
     let changed = false, sawAny = false;
     for (const m of messages) {
-      gwSeenIds.add(m.id);
       let r;
       try { r = await gwProcessMessage(m.id, cases); }
       catch (err) {
@@ -6689,13 +6773,16 @@ async function refreshGmailSync(force) {
         console.warn('[Gmail 연동] 메일 처리 오류', m.id, err);
         continue;
       }
-      if (r.skipped) continue;
+      if (r.skipped) { console.log(`[Gmail 연동] "${r.subject || m.id}" 건너뜀 — 견적 메일로 보이지 않음(제목·본문에 관련 키워드 없음)`); continue; }
       if (r.attachmentNote && /분석 실패/.test(r.attachmentNote)) gwLastErrors.push(`"${r.subject || m.id}" 첨부파일 분석 실패 — ${r.attachmentNote}`);
       sawAny = true;
       const c = r.caseId ? findCase(r.caseId) : null;
-      if (c && applyGmailUpdate(c, r)) changed = true;
+      const applied = !!(c && applyGmailUpdate(c, r));
+      if (applied) changed = true;
+      const matchInfo = c ? `Case 매칭됨(${caseLabel(c)})` : r.vesselMatch ? '선박명만 일치 — 항차 불일치 또는 후보 여러 건이라 매칭 안 됨' : '선박명·항차 불일치 — 매칭 안 됨';
+      const warrantyInfo = r.warrantyText ? 'Warranty 찾음' : (r.attachmentNote ? 'Warranty 못 찾음(확인 필요/오류 — attachmentNote 참고)' : 'Warranty 못 찾음');
+      console.log(`[Gmail 연동] "${r.subject || m.id}" — ${matchInfo} · ${warrantyInfo} · 반영: ${applied ? '예' : '아니오'}`);
     }
-    storageSet('war-ap.gmailWeb.seen', JSON.stringify([...gwSeenIds].slice(-3000)));
     const outcome = changed ? 'REGISTERED' : (sawAny ? 'UP_TO_DATE' : 'NO_DATA');
     gmailConn = { ok: true, code: '', msg: '', lastOutcome: outcome };
     const outcomeText = { REGISTERED: '조건 반영됨', UP_TO_DATE: '이미 반영된 조건과 동일 (새 변경 없음)', NO_DATA: '분석된 보험 조건 없음(일치하는 메일을 못 찾음)' }[outcome];
@@ -7056,6 +7143,174 @@ function finalPremiumTable(c) {
     <tr><th>등록</th><td>${esc(p.savedBy)} ${esc(p.savedAt)}</td></tr>
   </tbody></table>`;
 }
+
+/* ================= 기안 작성 (보험료 지급 내부 결재 문서) =================
+   이미 산출·저장되어 있는 보험료(c.premium → premiumCalc 결과)와 운항 일정(c.entryDate 등, c.ports)을
+   그대로 가져와 문서 형태로 보여준다. 여기서 새로 계산하거나 다른 화면에 쓰는 값을 바꾸지 않는다.
+   Case에 새로 쓰는 값은 draftCompanyPct(당사 분담 비율 %) 하나뿐 — 그 외에는 아무 것도 저장하지 않는다. */
+// HRA IN/OUT 한 줄 — buildFinalMail_KB의 같은 형식(시간 LT (UTC 오프셋), 날짜)을 그대로 따른다(중복이지만
+// 그 메일 함수는 발송용 문자열 전체를 만들기 때문에 이 문서용으로 값만 떼어 쓸 수 없어 별도로 둔다).
+function draftPointLine(c, which) {
+  const t = pointTime(c, which);
+  if (!t.date) return null;
+  const d = monDate(t.date);
+  if (!isValidTime(t.time)) return d;
+  const utc = utcPart(t.label);
+  return utc ? `${t.time.replace(':', '')} LT (${utc}), ${d}` : `${t.time.replace(':', '')} LT, ${d}`;
+}
+function draftPortLines(c) {
+  const out = [];
+  for (const p of (c.ports || [])) {
+    if (!p.port) continue;
+    const name = p.port.trim();
+    const line = (key, estVerb, actualVerb, isActual) => {
+      const dtv = p[key] || '';
+      const date = dtv.slice(0, 10), time = dtv.slice(11, 16);
+      if (!isValidDate(date)) return null;
+      const verb = isActual ? actualVerb : estVerb;
+      const d = monDate(date);
+      if (!isValidTime(time)) return `${verb} ${name}: ${d}`;
+      const z = portZone(name);
+      const u = z ? ltToUtcMs(dtv, z.zone) : null;
+      return u != null ? `${verb} ${name}: ${time.replace(':', '')} LT (${offsetLabel(zoneOffsetMin(z.zone, u))}), ${d}`
+        : `${verb} ${name}: ${time.replace(':', '')} LT, ${d}`;
+    };
+    const eta = line('eta', 'ETA', 'Arrived', !!p.etaActual);
+    if (eta) out.push(eta);
+    const etd = line('etd', 'ETD', 'Sailed', !!p.etdActual);
+    if (etd) out.push(etd);
+  }
+  return out;
+}
+const DD_PENDING = '<span class="pending">확인 필요</span>';
+function draftModel(c) {
+  const p = premiumInputsFromSaved(c);
+  const r = premiumCalc(c, p);
+  const vessel = c.vessel || '확인 필요';
+  const voyage = c.voyage || '확인 필요';
+  const title = `${esc(c.vessel || '')}호 ${esc(c.voyage || '')}항차 War &amp; Strikes 추가 보험료 발생의 건`;
+  const reason = `표제 건 관련하여, 영업팀 요청에 따라 ${esc(c.vessel || '')}호 ${esc(c.voyage || '')}항차에 대해 ` +
+    `W&amp;S(War &amp; Strikes) 추가 위험 담보가 적용되어 추가 보험료(AP, Additional Premium)가 발생하였습니다. ` +
+    `<span class="pending">[확인 필요: 해당 AP의 청구 운임 반영 여부]</span> 이에 재가를 요청드립니다.`;
+  const days = p.days != null ? p.days : defaultDays(c);
+  const periodLine = (isValidDate(c.entryDate) && isValidDate(c.exitDate))
+    ? `${c.entryDate.replace(/-/g, '.')} ~ ${c.exitDate.replace(/-/g, '.')} (총 ${days != null ? days + '일' : '확인 필요'})`
+    : DD_PENDING;
+  const inLine = draftPointLine(c, 'in');
+  const outLine = draftPointLine(c, 'out');
+  const portLines = draftPortLines(c);
+  const isKB = r.ins === 'KB';
+  const grossRow = {
+    period: (days != null && p.ratePeriod != null) ? `${c.entryDate ? c.entryDate.slice(5).replace('-', '/') : '?'} ~ ${c.exitDate ? c.exitDate.slice(5).replace('-', '/') : '?'} (총 ${days}일)` : DD_PENDING,
+    si: r.si ? fmtMoney(r.si.amt * minorUnit(r.si.cur), r.si.cur) : DD_PENDING,
+    rate: p.rate != null ? `${p.rate}%` : DD_PENDING,
+    gross: r.gross != null ? fmtMoney(r.gross, r.cur) : DD_PENDING
+  };
+  const ncbRows = [];
+  if (isKB) {
+    if (r.pre != null) ncbRows.push({
+      label: `Upfront NCB (선할인)${p.preRate != null ? ` ${p.preRate}%` : ''}`,
+      basis: `Gross Premium × ${p.preRate != null ? p.preRate : '?'}%`,
+      amt: fmtMoney(r.pre, r.cur),
+      due: c.upfrontRefundDone ? '환급 완료' : (c.upfrontRefundNA ? '해당 없음' : monthLabel(c.upfrontRefundExpectedMonth)),
+      note: ''
+    });
+    if (r.post != null) ncbRows.push({
+      label: `NCB (후할인)${r.postRate != null ? ` ${r.postRate}%` : ''}`,
+      basis: `${r.postBasis === 'GROSS' ? 'Gross Premium' : '선할인 반영 후 보험료'} × ${r.postRate != null ? r.postRate : '?'}%`,
+      amt: fmtMoney(r.post, r.cur),
+      due: r.refundIsActual ? '환급 완료' : monthLabel(c.refundExpectedMonth),
+      note: r.postTableFound ? '' : '추후 협의'
+    });
+  } else if (r.pre != null) {
+    ncbRows.push({
+      label: `NCB (최초 할인)${p.preRate != null ? ` ${p.preRate}%` : ''}`,
+      basis: `Gross Premium × ${p.preRate != null ? p.preRate : '?'}%`,
+      amt: fmtMoney(r.pre, r.cur), due: '-', note: '별도 환급 없음'
+    });
+  }
+  const ncbTotal = r.totalDiscount != null ? fmtMoney(r.totalDiscount, r.cur) : null;
+  const splitApplicable = c.payer === 'CHARTERER';
+  const attach = c.invoice
+    ? `※ 첨부 : ${esc(c.vessel || '')}호 ${esc(c.voyage || '')}항차 WAR AP 인보이스 外 1부 (총 2부) 끝.`
+    : `※ 첨부 : ${DD_PENDING} (인보이스 접수 기록이 없어 첨부 내용을 자동으로 채우지 못했습니다 — 직접 입력하세요)`;
+  return { c, title, reason, periodLine, inLine, outLine, portLines, grossRow, isKB, ncbRows, ncbTotal,
+    cur: r.cur, net: r.net, splitApplicable, attach };
+}
+function draftSplitHtml(c, d) {
+  if (!d.splitApplicable) return '';
+  const pct = c.draftCompanyPct;
+  const chartererPct = pct != null ? 100 - pct : null;
+  const amt = p => (d.net != null && p != null) ? fmtMoney(Math.round(d.net * p / 100), d.cur) : DD_PENDING;
+  return `<div class="dd-sec draft-no-print-edit">
+    <b>보험료 부담 주체 및 분담 내용</b> (${esc(payerText(c))})
+    <div class="draft-split-row draft-no-print">
+      당사 분담 비율 <input type="number" id="draftCompanyPct" min="0" max="100" step="any" value="${pct != null ? esc(pct) : ''}" placeholder="%">%
+      <span class="muted" id="draftChartererPctHint">(Charterer ${chartererPct != null ? chartererPct : '-'}%)</span>
+    </div>
+    <div id="draftAmtCharterer">Charterer 부담금 : ${amt(chartererPct)}</div>
+    <div id="draftAmtCompany">당사 부담금 : ${amt(pct)}</div>
+    <div class="muted" id="draftSplitBasis" style="font-size:12px">분담 비율 산출 근거 : ${pct != null ? `Net Premium × ${pct}% (당사) / × ${chartererPct}% (Charterer)` : DD_PENDING}</div>
+  </div>`;
+}
+// 분담 비율(%) 입력칸을 고칠 때 — 기안문 전체를 다시 그리면 제목·본문에 입력 중인 다른 수정이 지워지므로,
+// 분담 금액 쪽 DOM 4곳만 직접 고친다(renderCaseDetail 호출 없음).
+function draftSplitUpdateDom(box, c, d) {
+  const pct = c.draftCompanyPct;
+  const chartererPct = pct != null ? 100 - pct : null;
+  const amt = p => (d.net != null && p != null) ? fmtMoney(Math.round(d.net * p / 100), d.cur) : DD_PENDING;
+  const put = (id, html) => { const el = box.querySelector('#' + id); if (el) el.innerHTML = html; };
+  put('draftChartererPctHint', `(Charterer ${chartererPct != null ? chartererPct : '-'}%)`);
+  put('draftAmtCharterer', `Charterer 부담금 : ${amt(chartererPct)}`);
+  put('draftAmtCompany', `당사 부담금 : ${amt(pct)}`);
+  put('draftSplitBasis', `분담 비율 산출 근거 : ${pct != null ? `Net Premium × ${pct}% (당사) / × ${chartererPct}% (Charterer)` : DD_PENDING}`);
+}
+function draftModalHtml(c) {
+  const d = draftModel(c);
+  const table = `<table class="dd-table"><thead><tr><th>요율 적용 기간</th><th>부보가액</th><th>Gross Rate</th><th>Gross Premium</th></tr></thead>
+    <tbody><tr><td class="num">${d.grossRow.period}</td><td class="num">${d.grossRow.si}</td><td class="num">${d.grossRow.rate}</td>
+      <td class="num dd-red">${d.grossRow.gross}</td></tr></tbody></table>`;
+  const ncbTable = d.ncbRows.length ? `<table class="dd-table"><thead><tr><th>구분</th><th>산출 근거</th><th>금액</th><th>환급 예정 일자</th><th>비고</th></tr></thead>
+    <tbody>${d.ncbRows.map(r => `<tr><td>${esc(r.label)}</td><td>${esc(r.basis)}</td><td class="num">${esc(r.amt)}</td><td>${esc(r.due)}</td><td>${esc(r.note)}</td></tr>`).join('')}
+      <tr><td colspan="2"><b>합계</b></td><td class="num dd-red">${d.ncbTotal != null ? esc(d.ncbTotal) : DD_PENDING}</td><td colspan="2"></td></tr>
+    </tbody></table>` : `<p class="pending">NCB 산출 내역이 없습니다 — 보험료 산출 화면에서 NCB(선할인) 요율을 입력하면 반영됩니다.</p>`;
+  const scheduleLines = [
+    d.inLine ? `<span class="dd-hi">HRA IN: ${esc(d.inLine)}</span>` : `HRA IN: ${DD_PENDING}`,
+    ...d.portLines.map(esc),
+    d.outLine ? `<span class="dd-hi">HRA OUT: ${esc(d.outLine)}</span>` : `HRA OUT: ${DD_PENDING}`
+  ].join('<br>');
+  return `<div class="modal-backdrop" id="draftModalBackdrop">
+    <div class="draft-modal-panel">
+      <div class="modal-head draft-no-print">
+        <h2 style="margin:0">기안 작성 미리보기</h2>
+        <button type="button" class="btn-text" data-act="draft-close">닫기 ✕</button>
+      </div>
+      <div class="bar draft-no-print" style="margin-bottom:10px">
+        <button type="button" class="sub small" data-act="draft-copy-title">제목 복사</button>
+        <button type="button" class="sub small" data-act="draft-copy-all">기안문 전체 복사</button>
+        <button type="button" class="sub small" data-act="draft-print">인쇄</button>
+      </div>
+      <div class="draft-doc" id="draftDocBody">
+        <div class="dd-title" id="draftTitle" contenteditable="true">${d.title}</div>
+        <div class="dd-sec" contenteditable="true">${d.reason}</div>
+        <div class="dd-sec" contenteditable="true"><span class="dd-no">1.</span> 추가 전쟁위험 담보 적용 기간 : ${d.periodLine}<br>${scheduleLines}</div>
+        <div class="dd-sec"><span class="dd-no">2.</span> 추가 전쟁위험 총 보험료${table}</div>
+        ${draftSplitHtml(c, d)}
+        <div class="dd-sec"><span class="dd-no">3.</span> NCB 예상 금액${ncbTable}</div>
+        <div class="dd-attach" contenteditable="true">${d.attach}</div>
+      </div>
+      <div class="msg draft-no-print" id="draftMsg"></div>
+      <p class="muted draft-no-print" style="margin-top:10px">회색으로 표시된 "확인 필요" 부분은 시스템에 저장된 정보가 없어 자동으로 채우지 못한 부분입니다 — 위 문서 안에서 직접 눌러 고치면 됩니다. 이 수정 내용은 저장되지 않으니(분담 비율만 저장됩니다), 인쇄·복사 전에 확인해 주세요.</p>
+    </div>
+  </div>`;
+}
+function setDraftMsg(text, kind) {
+  const el = $('draftMsg');
+  if (!el) return;
+  el.className = 'msg draft-no-print ' + (kind || '');
+  el.textContent = text;
+}
+function printDraftDoc() { window.print(); }
 // Gmail 인보이스 붙여넣기·분석 화면은 더 이상 쓰지 않는다(보험료 지급 단계 간소화) — 예전에 저장된 c.invoiceInfo/c.invoiceDocs
 // 데이터 자체는 지우지 않고 그대로 보존한다(화면에서만 뺌). 아래 상태값들은 현재 화면(6단계 진행바)에서 쓴다.
 let payEditFor = null;   // 5단계(보험료 지급) 칸을 "수정"으로 열어 둔 Case id — 다른 Case를 열면 자동으로 꺼진다
@@ -8540,6 +8795,8 @@ function sanitizeCase(o, usedIds) {
       fileName: s(x.fileName), fileDataUrl: s(x.fileDataUrl)
     })) : [],
     finalPremium: o.finalPremium && typeof o.finalPremium === 'object' ? o.finalPremium : null,
+    // 기안문의 당사·Charterer 분담 비율(%) — 기안 작성 화면에서만 쓰는 값 (0~100, 없으면 null = 미입력)
+    draftCompanyPct: (() => { const v = n(o.draftCompanyPct); return v != null && v >= 0 && v <= 100 ? v : null; })(),
     paid: o.paid && typeof o.paid === 'object' ? o.paid : null,
     premiumReviewNeeded: !!o.premiumReviewNeeded,
     policyNo: s(o.policyNo), endorsementDate: dt(o.endorsementDate),
@@ -9898,7 +10155,7 @@ const CLOUD = {
     'quoteMail', 'coverMail', 'finalMail', 'invoice', 'invoiceInfo', 'invoiceDocs',
     'paid', 'refundState', 'refundExpected', 'refunds', 'refundDone',
     'refundExpectedMonth', 'refundActualMonth', 'refundActualDate', 'refundActualAmount',
-    'refundActualCurrency', 'policyNo', 'endorsementDate']
+    'refundActualCurrency', 'policyNo', 'endorsementDate', 'draftCompanyPct']
 };
 
 const fbApp = initializeApp(CLOUD.firebaseConfig);
