@@ -8462,7 +8462,7 @@ function onRequest(e) {
   // 공용저장(베타)에 연결돼 있으면 같이 올린다 — 연결 안 돼 있거나 실패해도 위의 로컬 저장은
   // 이미 끝났으므로 이 Case가 사라지거나 저장이 안 되는 일은 없다(이 PC에서는 그대로 보임).
   if (window.warApCloud) {
-    window.warApCloud.createCase(c).then(ok => { if (ok) { c._cloud = true; renderAll(); } });
+    window.warApCloud.createCase(c).then(ok => { if (ok) { c._cloud = true; persistLocalOnly(); renderAll(); } });
   }
   // 업무 알림(베타): 부보 요청·견적 요청 둘 다 기획/ESG팀에 알린다.
   notifyWork('NEW_REQUEST', c, isQuote ? '영업팀 신규 견적 요청 등록' : '영업팀 신규 부보 요청 등록', at);
@@ -8750,6 +8750,10 @@ function sanitizeCase(o, usedIds) {
   return {
     _migrated: migrated,
     _stepMigrated: !hasStep,
+    // 공용저장(Firestore)과 한 번이라도 짝지어졌는지 — 이 표시가 없으면 mergeCloudCases가 서버에서
+    // 받은 최신 내용으로 다시 갱신해 주지 않는다. 예전에는 이 함수가 새로 만든 객체에 이 값을
+    // 넣지 않아 새로고침마다 지워지는 결함이 있었다.
+    _cloud: !!o._cloud,
     step: st.step, hraOut: !!st.hraOut,
     insStatus, hraStatus,
     id, createdAt: s(o.createdAt),
@@ -8970,9 +8974,14 @@ function storageRemove(key) {
 }
 function showStorageWarn() { $('storageWarn').classList.remove('hidden'); }
 
-function persist() {
+// 공용저장 왕복을 일으키지 않고 지금 state를 그대로 이 PC에만 저장한다 — mergeCloudCases(서버에서
+// 받은 내용을 반영할 때)와, Case를 공용저장에 올린 바로 뒤(_cloud 표시를 남길 때) 둘 다 쓴다.
+function persistLocalOnly() {
   const data = { app: 'war-ap', version: 1, savedAt: nowStr(), cases: state.cases, history: state.history, vesselTz: state.vesselTz, postTables: state.postTables, contacts: state.contacts, notifications: state.notifications };
   if (!storageSet(STORAGE_KEY, JSON.stringify(data))) showStorageWarn();
+}
+function persist() {
+  persistLocalOnly();
   scheduleCloudSync();
 }
 // 공용저장(연결돼 있을 때만) — persist()가 워낙 자주 불려서(입력 한 칸마다) 매번 올리면 낭비이므로,
@@ -9027,6 +9036,9 @@ function scheduleCloudSync() {
           console.warn(`[공용저장] "${c.vessel}/${c.voyage}" 올리기 실패 — ${window.warApCloud.lastCaseError}`);
         }
         if (done === total) {
+          // _cloud 표시를 바로 이 PC에 저장해 둔다 — 안 하면 새로고침 전까지만 메모리에 남아 있다가
+          // (이번에 _cloud가 보존되게 고쳤어도) 저장 자체가 안 돼 있으면 사라진다.
+          persistLocalOnly();
           setCloudPushMsg(fails.length
             ? `${total}건 중 성공 ${okCount}·실패 ${fails.length} — ${fails[0]}`
             : `${total}건 모두 성공`);
@@ -9130,19 +9142,29 @@ function updateCloudSyncButton() {
 function mergeCloudCases(remoteList) {
   console.log(`[공용저장] mergeCloudCases 호출 — 서버 Case ${remoteList.length}건, 이 PC에 이미 있는 Case ${state.cases.length}건`);
   const byId = new Map(state.cases.map(c => [c.id, c]));
+  let added = 0, updated = 0;
   for (const r of remoteList) {
-    const existing = byId.get(r.id);
-    if (existing) {
-      if (existing._cloud) Object.assign(existing, r, { _cloud: true });
-      // else: 이 PC에 이미 로컬로 있는 Case(아직 공용저장과 짝짓기 전) — 안전하게 그대로 둔다.
-    } else {
-      state.cases.push(Object.assign({}, r, { _cloud: true }));
+    // Case 하나를 합치다 예외가 나도(예상 못한 필드 형태 등) 나머지 Case는 계속 합친다 — 예전에는
+    // 여기서 예외가 나면 루프 전체가 멈춰서, 문제 있는 Case 뒤에 있던 Case들까지 조용히 누락될 수
+    // 있었다(화면엔 아무 오류도 안 보이고 그냥 그 Case들이 안 보이는 것처럼 보임).
+    try {
+      const existing = byId.get(r.id);
+      if (existing) {
+        if (existing._cloud) { Object.assign(existing, r, { _cloud: true }); updated++; }
+        // else: 이 PC에 이미 로컬로 있는 Case(아직 공용저장과 짝짓기 전) — 안전하게 그대로 둔다.
+      } else {
+        state.cases.push(Object.assign({}, r, { _cloud: true }));
+        added++;
+      }
+    } catch (err) {
+      console.error(`[공용저장] Case 병합 실패 — ${r && r.vessel}/${r && r.voyage} (${r && r.id})`, err);
     }
   }
-  // persist()가 아니라 localStorage만 직접 쓴다 — persist()를 부르면 scheduleCloudSync()가 다시 돌아
+  console.log(`[공용저장] 병합 결과 — 새로 추가 ${added}건, 갱신 ${updated}건, 이 PC에 이제 Case ${state.cases.length}건`);
+  // persist()가 아니라 persistLocalOnly()만 쓴다 — persist()를 부르면 scheduleCloudSync()가 다시 돌아
   // 방금 받은 걸 그대로 다시 올려보내는(불필요한 왕복) 일이 생긴다. 받은 내용은 이 PC에도 그대로
   // 남겨 둬야(새로고침해도 안 사라지게) 하므로 저장 자체는 한다.
-  storageSet(STORAGE_KEY, JSON.stringify({ app: 'war-ap', version: 1, savedAt: nowStr(), cases: state.cases, history: state.history, vesselTz: state.vesselTz, postTables: state.postTables, contacts: state.contacts, notifications: state.notifications }));
+  persistLocalOnly();
   renderAll();
 }
 window.addEventListener('warap-cloud-status', e => {
@@ -10265,14 +10287,19 @@ async function activateForUser(user) {
   warApCloud.status = 'connected'; warApCloud.error = ''; notifyStatus();
   if (unsubscribeCases) unsubscribeCases();
   unsubscribeCases = onSnapshot(collection(fbStore, 'cases'), snap => {
-    console.log(`[공용저장] 서버에서 Case ${snap.size}건 받음`);
+    const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    // 선명/항차 목록까지 같이 보여준다 — 두 컴퓨터(브라우저)에서 이 줄만 나란히 비교하면, 서버에
+    // 실제로 몇 건이 있고 어떤 Case인지 F12 콘솔 없이도 바로 알 수 있다(어떤 Case가 서버에 없는지,
+    // 또는 이 PC에만 있는지 가려내는 용도).
+    const list = docs.map(c => `${c.vessel || '(선명없음)'}/${c.voyage || '(항차없음)'}`).join(', ');
+    console.log(`[공용저장] 서버에서 Case ${snap.size}건 받음 — ${list}`);
     // Console(F12) 없이도 바로 보이도록 — 이 모듈 스크립트도 같은 문서(DOM)를 쓰므로 직접 고칠 수 있다.
-    const msg = `받은 결과: 서버 Case ${snap.size}건`;
+    const msg = `받은 결과: 서버 Case ${snap.size}건 — ${list}`;
     const el = document.getElementById('cloudSyncPull');
     if (el) { el.textContent = msg; el.classList.remove('hidden'); }
     if (window.cloudDiag) window.cloudDiag.pull = msg;
     if (window.renderCloudDiagBanner) window.renderCloudDiagBanner();
-    if (casesCb) casesCb(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    if (casesCb) casesCb(docs);
   }, err => {
     console.error('[공용저장] 구독 오류', err);
     warApCloud.status = 'error'; warApCloud.error = '공용저장 연결이 끊겼습니다: ' + err.message; notifyStatus();
