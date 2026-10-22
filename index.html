@@ -9002,8 +9002,8 @@ function scheduleCloudSync() {
         done++;
         if (ok) { c._cloud = true; okCount++; console.log(`[공용저장] "${c.vessel}/${c.voyage}" 올림 성공`); }
         else {
-          fails.push(`${c.vessel}/${c.voyage}: ${window.warApCloud.error}`);
-          console.warn(`[공용저장] "${c.vessel}/${c.voyage}" 올리기 실패 — status=${window.warApCloud.status}, error=${window.warApCloud.error}`);
+          fails.push(`${c.vessel}/${c.voyage}: ${window.warApCloud.lastCaseError}`);
+          console.warn(`[공용저장] "${c.vessel}/${c.voyage}" 올리기 실패 — ${window.warApCloud.lastCaseError}`);
         }
         if (done === total) {
           setCloudPushMsg(fails.length
@@ -10274,15 +10274,30 @@ const warApCloud = {
     }
   },
   onCases(cb) { casesCb = cb; },
+  // Case 하나를 올리는 데 실패해도(예: 그 Case 하나만 유독 너무 크거나 형식이 이상한 경우) 연결 자체는
+  // 끊긴 게 아니다 — 그런데 예전 코드는 실패 시 this.status = 'error'로 바꿔 버렸고, createCase() 맨 앞의
+  // "연결 상태 아니면 바로 포기" 가드 때문에 같은 번 호출(batch)의 다음 Case들까지 전부 조용히 실패하는
+  // 연쇄 버그가 있었다. 이제 이 Case 하나의 실패를 lastCaseError에만 남기고, 전체 연결 상태는 그대로 둔다
+  // (연결 자체가 끊긴 건 onSnapshot 쪽 err 콜백에서만 status='error'로 바꾼다).
+  lastCaseError: '',
   async createCase(caseObj) {
     if (this.status !== 'connected') return false;
     const payload = {};
     for (const k of Object.keys(caseObj)) {
       if (k === 'id' || k.startsWith('_')) continue;   // id는 문서 경로로 따로 쓰고, _cloud 같은 클라이언트 전용 표시는 보내지 않는다
+      // ais.track은 [[lat,lon], [lat,lon], ...] 형태(배열 속의 배열)인데, Firestore는 배열 속에 배열이
+      // 바로 들어가는 구조를 지원하지 않아 문서 전체가 거부된다(실제 원인으로 확인됨). AIS 위치는
+      // 지도 표시용으로만 쓰고 진행현황 계산에는 쓰이지 않아(hasPos/c.ais.last 등 참고용), 공용저장에는
+      // 아예 보내지 않는다 — 각 컴퓨터가 AIS는 어차피 실시간으로 따로 받아온다.
+      if (k === 'ais') continue;
       payload[k] = caseObj[k] === undefined ? null : caseObj[k];
     }
     try { await setDoc(doc(fbStore, 'cases', caseObj.id), payload); return true; }
-    catch (err) { this.status = 'error'; this.error = '공용저장에 올리지 못했습니다: ' + err.message; notifyStatus(); return false; }
+    catch (err) {
+      this.lastCaseError = `${err.code || ''} ${err.message || err}`.trim();
+      console.error('[공용저장] Case 쓰기 실패', caseObj.id, caseObj.vessel, caseObj.voyage, err);
+      return false;
+    }
   },
   async disconnect() {
     if (unsubscribeCases) { unsubscribeCases(); unsubscribeCases = null; }
